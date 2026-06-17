@@ -1,0 +1,11 @@
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -I/home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon
+    - -I/home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/base
+    - -I/home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/net
+    - -I/home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/net/Poller
+    - -I/home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/net/Http
+    - -I/home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/net/Log
+  # 可选：禁用 compile_commands.json 的自动查找（避免冲突）
+  CompilationDatabase: /nonexistent

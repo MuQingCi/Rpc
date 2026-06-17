@@ -1,0 +1,14 @@
+# 忽略 build 目录（项目根目录下的）
+/build/
+
+# 忽略所有 .o 文件
+*.o
+
+# 忽略 .cache 目录（项目根目录下的）
+/.cache/
+
+# 忽略 test目录
+/test/
+
+#忽略resource目录
+/resource/

@@ -1,0 +1,10 @@
+[2026-06-14 19:00:31]  thread_id= 132621912762048  INFO /HttpCallback.cc: 13 (httpCallback) | Do the HTTPCallBack!
+[2026-06-14 19:00:42]  thread_id= 132621912762048  INFO /HttpCallback.cc: 13 (httpCallback) | Do the HTTPCallBack!
+[2026-06-14 19:04:32]  thread_id= 140581586069184  INFO /HttpCallback.cc: 13 (httpCallback) | Do the HTTPCallBack!
+[2026-06-14 19:04:32]  thread_id= 140581586069184  INFO /TcpConnection.cc: 171 (sendFileInLoop) | Open The File!
+[2026-06-14 19:04:32]  thread_id= 140581586069184  INFO /TcpConnection.cc: 240 (handleWrite) | Send the file Sucesslly
+[2026-06-14 19:04:41]  thread_id= 129539650873024  INFO /HttpCallback.cc: 13 (httpCallback) | Do the HTTPCallBack!
+[2026-06-14 19:04:41]  thread_id= 129539650873024  INFO /TcpConnection.cc: 171 (sendFileInLoop) | Open The File!
+[2026-06-14 19:04:41]  thread_id= 129539650873024  INFO /TcpConnection.cc: 240 (handleWrite) | Send the file Sucesslly
+[2026-06-14 19:06:42]  thread_id= 123645397558976  INFO /HttpCallback.cc: 13 (httpCallback) | Do the HTTPCallBack!
+[2026-06-14 19:06:42]  thread_id= 123645397558976  INFO /TcpConnection.cc: 171 (sendFileInLoop) | Open The File!

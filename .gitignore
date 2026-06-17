@@ -1,0 +1,6 @@
+#忽略build文件夹
+/build
+
+#忽略.cache文件夹
+/.cache
+

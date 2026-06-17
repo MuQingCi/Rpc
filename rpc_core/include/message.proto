@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package CLRPC;
+
+message request{
+    string message= 1;
+}
+
+message response{
+    string message = 1;
+}
