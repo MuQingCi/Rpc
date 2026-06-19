@@ -67,7 +67,7 @@ void EventLoop::loop()
 
 void EventLoop::quit()
 {
-    assert(!quit_);
+    if (quit_) return;
     quit_ = true;
     if(!isInThread())
     {

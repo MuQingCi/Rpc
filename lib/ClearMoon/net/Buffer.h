@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <endian.h>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 namespace clearmoon
@@ -86,6 +87,11 @@ public:
         return readAsString(readableBytes());
     }
 
+    //读取头部无符号Int
+    uint64_t readUint64();
+    uint32_t readUint32();
+    uint16_t readUint16();
+    uint8_t readUint8();
 
     const char* findCRLF() const;
 
@@ -125,23 +131,23 @@ public:
 
     //写入预留头部数据
     void prepend(const void* data, size_t len);
-    void prependInt64(int64_t x)
+    void prependInt64(uint64_t x)
     {
-        int64_t bigInt = htobe64(x);
+        uint64_t bigInt = htobe64(x);
         prepend(&bigInt, sizeof bigInt);
     }
-    void prependInt32(int32_t x)
+    void prependInt32(uint32_t x)
     {
-        int32_t bigInt = htobe32(x);
+        uint32_t bigInt = htobe32(x);
         prepend(&bigInt, sizeof bigInt);
     }
-    void prependInt16(int16_t x)
+    void prependInt16(uint16_t x)
     {
-        int16_t bigInt = htobe16(x);
+        uint16_t bigInt = htobe16(x);
         prepend(&bigInt, sizeof bigInt);
     }
 
-    void prependInt8(int8_t x)
+    void prependInt8(uint8_t x)
     {
         prepend(&x, sizeof x);
     }

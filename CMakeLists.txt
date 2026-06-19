@@ -14,3 +14,6 @@ add_subdirectory(lib/ClearMoon)
 
 # 添加 rpc 核心库
 add_subdirectory(rpc_core)
+
+# 添加 RPC 客户端
+add_subdirectory(Client)

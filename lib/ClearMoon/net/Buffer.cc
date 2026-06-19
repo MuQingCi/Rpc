@@ -3,6 +3,9 @@
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <endian.h>
 #include <string>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -32,6 +35,53 @@ std::string Buffer::readAsString(size_t len)
     return result;
 }
 
+uint64_t Buffer::readUint64()
+{
+    static_assert(sizeof(uint64_t) == 8, "int64_t must be 8 Bytes");
+    assert(readableBytes() >= sizeof(uint64_t));
+
+    uint64_t netVal;
+    memcpy(&netVal, peek(), sizeof(netVal));
+    retrieve(sizeof(netVal));
+
+    return be64toh(netVal);  //大端字节序转主机字节序
+}
+
+uint32_t Buffer::readUint32()
+{
+    static_assert(sizeof(uint32_t) == 4, "int32_t must be 4 Bytes");
+    assert(readableBytes() >= sizeof(uint32_t));
+
+    uint32_t netVal;
+    memcpy(&netVal, peek(), sizeof(netVal));
+    retrieve(sizeof(netVal));
+
+    return be32toh(netVal);  //大端字节序转主机字节序
+}
+
+uint16_t Buffer::readUint16()
+{
+    static_assert(sizeof(uint16_t) == 2, "int16_t must be 2 Bytes");
+    assert(readableBytes() >= sizeof(uint16_t));
+
+    uint16_t netVal;
+    memcpy(&netVal, peek(), sizeof(netVal));
+    retrieve(sizeof(netVal));
+
+    return be16toh(netVal);  //大端字节序转主机字节序
+}
+
+uint8_t Buffer::readUint8()
+{
+    assert(readableBytes() >= sizeof(uint8_t));
+
+    uint8_t val = *peek();
+    
+    retrieve(sizeof(val));
+
+    return val;  // 单字节无需字节序转换
+}
+
 const char* Buffer::findCRLF() const
 {
     const char* crlf = std::search(peek(), beginWrite(), kCRLF, kCRLF + 2);
@@ -46,6 +96,8 @@ void Buffer::retrieve(size_t len)
     else
         retrieveAll();
 }
+
+
 
 // =========== 写入操作 =========== //
 
@@ -135,3 +187,4 @@ void Buffer::ensureWriteable(size_t len)
     }
     assert(writeableBytes() >= len);
 }
+

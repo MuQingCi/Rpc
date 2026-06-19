@@ -2,7 +2,6 @@
 #include "InetAddress.h"
 
 #include <cassert>
-#include <cstddef>
 #include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>

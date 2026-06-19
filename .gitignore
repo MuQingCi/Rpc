@@ -4,3 +4,8 @@
 #忽略.cache文件夹
 /.cache
 
+/lib/ClearMoon/.cache
+/lib/ClearMoon/build
+/lib/ClearMoon/TestInfo.txt
+/lib/ClearMoon/resource
+/lib/ClearMoon/test

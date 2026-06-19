@@ -7,6 +7,7 @@
 #include "EventLoop.h"
 #include "InetAddress.h"
 #include "Socket.h"
+#include "net/Buffer.h"
 
 #include <cstddef>
 #include <memory>
@@ -46,6 +47,7 @@ public:
 
     bool connected() const { return state_ == kConnected; }
 
+    void send(Buffer* buff);
     void send(const std::string& message);
     void send(const void*data, size_t len);
     void sendInLoop(const void*data, size_t len);

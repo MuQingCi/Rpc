@@ -80,6 +80,11 @@ void TcpConnection::forceClose()
     }
 }
 
+void TcpConnection::send(Buffer* buff)
+{
+    send(buff->peek(), buff->readableBytes());
+}
+
 void TcpConnection::send(const std::string& message)
 {
     send(message.data(), message.size());
