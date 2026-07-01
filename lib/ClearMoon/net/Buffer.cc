@@ -1,4 +1,5 @@
 #include "Buffer.h"
+#include "net/Endian.h"
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -44,7 +45,7 @@ uint64_t Buffer::readUint64()
     memcpy(&netVal, peek(), sizeof(netVal));
     retrieve(sizeof(netVal));
 
-    return be64toh(netVal);  //大端字节序转主机字节序
+    return netToHost64(netVal);  //大端字节序转主机字节序
 }
 
 uint32_t Buffer::readUint32()
@@ -56,7 +57,7 @@ uint32_t Buffer::readUint32()
     memcpy(&netVal, peek(), sizeof(netVal));
     retrieve(sizeof(netVal));
 
-    return be32toh(netVal);  //大端字节序转主机字节序
+    return netToHost32(netVal);  //大端字节序转主机字节序
 }
 
 uint16_t Buffer::readUint16()
@@ -68,7 +69,7 @@ uint16_t Buffer::readUint16()
     memcpy(&netVal, peek(), sizeof(netVal));
     retrieve(sizeof(netVal));
 
-    return be16toh(netVal);  //大端字节序转主机字节序
+    return netToHost16(netVal);  //大端字节序转主机字节序
 }
 
 uint8_t Buffer::readUint8()
@@ -96,7 +97,6 @@ void Buffer::retrieve(size_t len)
     else
         retrieveAll();
 }
-
 
 
 // =========== 写入操作 =========== //

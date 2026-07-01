@@ -9,7 +9,6 @@
 #include "Socket.h"
 #include "Callbacks.h"
 
-#include <future>
 #include <unordered_map>
 
 namespace clearmoon 

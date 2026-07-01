@@ -6,6 +6,7 @@
  * 
  */
 #include "../base/noncopy.h"
+#include "net/Endian.h"
 
 #include <cassert>
 #include <cstddef>
@@ -133,17 +134,17 @@ public:
     void prepend(const void* data, size_t len);
     void prependInt64(uint64_t x)
     {
-        uint64_t bigInt = htobe64(x);
+        uint64_t bigInt = host64ToNet(x);
         prepend(&bigInt, sizeof bigInt);
     }
     void prependInt32(uint32_t x)
     {
-        uint32_t bigInt = htobe32(x);
+        uint32_t bigInt = host32ToNet(x);
         prepend(&bigInt, sizeof bigInt);
     }
     void prependInt16(uint16_t x)
     {
-        uint16_t bigInt = htobe16(x);
+        uint16_t bigInt = host16ToNet(x);
         prepend(&bigInt, sizeof bigInt);
     }
 

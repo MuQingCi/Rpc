@@ -1,6 +1,0 @@
-[0x70b9eec0f3e0]  thread_id= 123943881656256INFO /home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/test/../net/Http/HttpServer.h: 38 (HttpServer) | The HttpServer has been created!
-[0x70b9eec0f3e0]  thread_id= 123943881656256INFO /home/lanxiyuan/Project_Cpp/Net_Library/ClearMoon/test/HttpServer_test.cc: 23 (main) | The HttpServer has been created!
-[2026-06-13]  thread_id= 123298829735872  INFO /HttpServer.h: 38 (HttpServer) | The HttpServer has been created!
-[2026-06-13]  thread_id= 123298829735872  INFO /HttpServer_test.cc: 23 (main) | The HttpServer has been created!
-[2026-06-13 18:32:12]  thread_id= 137716151490496  INFO /HttpServer.h: 38 (HttpServer) | The HttpServer has been created!
-[2026-06-13 18:32:12]  thread_id= 137716151490496  INFO /HttpServer_test.cc: 23 (main) | The HttpServer has been created!

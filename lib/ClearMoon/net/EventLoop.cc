@@ -1,3 +1,4 @@
+#include "TimerQueue.h"
 #include "EventLoop.h"
 #include "Channel.h"
 #include "../base/CurrentThread.h"
@@ -24,7 +25,8 @@ EventLoop::EventLoop(): tid_(Current::tid()),
                         callingPendingFunc_(false),
                         weakFd_(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)), 
                         weakChannel_(std::make_unique<Channel>(this, weakFd_)),
-                        poller_(createDefaultPoller(this))
+                        poller_(createDefaultPoller(this)),
+                        timerQueue_(std::make_unique<TimerQueue>(this))
 {
     weakChannel_->setReadCallback([this]{ handleWeakup(); });
     weakChannel_->enableReading();
@@ -33,7 +35,6 @@ EventLoop::EventLoop(): tid_(Current::tid()),
 EventLoop::~EventLoop()
 {
     quit();
-
 }
 
 void EventLoop::loop()
@@ -47,7 +48,8 @@ void EventLoop::loop()
         activeChannels_.clear();
 
         Timestamp time;
-        time = poller_->poll(0,&activeChannels_);
+        // 使用 -1 永久阻塞，由 timerfd / eventfd 唤醒
+        time = poller_->poll(-1, &activeChannels_);
         
         eventHanding_ = true;
 
@@ -120,6 +122,29 @@ void EventLoop::removeChannel(Channel* channel)
     poller_->removeChannel(channel);
 }
 
+// ========== 定时器接口实现 ==========
+
+TimerId EventLoop::runAt(Timestamp when, Func cb)
+{
+    return timerQueue_->addTimer(std::move(cb), when, 0.0);
+}
+
+TimerId EventLoop::runAfter(double delay, Func cb)
+{
+    Timestamp when(Timestamp::now().getMicroSecond() + static_cast<int64_t>(delay * 1000000));
+    return timerQueue_->addTimer(std::move(cb), when, 0.0);
+}
+
+TimerId EventLoop::runEvery(double interval, Func cb)
+{
+    Timestamp when(Timestamp::now().getMicroSecond() + static_cast<int64_t>(interval * 1000000));
+    return timerQueue_->addTimer(std::move(cb), when, interval);
+}
+
+void EventLoop::cancel(TimerId timerId)
+{
+    timerQueue_->cancel(timerId);
+}
 
 
 

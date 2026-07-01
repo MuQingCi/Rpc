@@ -1,6 +1,7 @@
 #include "../include/rpc_server.h"
 #include "message.pb.h"
 #include "net/Buffer.h"
+#include "net/Log/Logger.h"
 #include "net/TcpServer.h"
 #include "net/TcpConnection.h"
 
@@ -12,9 +13,6 @@
 #include <cstdint>
 #include <string>
 
-// using namespace clearmoon;
-// using namespace clearmoon::net;
-
 RPCServer::RPCServer(EventLoop* loop, InetAddress& listenAddr) : tcpServer_(loop, TcpServer::ThreadPoolInitCallback(), listenAddr)
 {
     tcpServer_.setMessageCallback([this](const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm) { onMessage(conn, buff, tm); });
@@ -22,35 +20,42 @@ RPCServer::RPCServer(EventLoop* loop, InetAddress& listenAddr) : tcpServer_(loop
 
 void RPCServer::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm)
 {   
-    std::string body;
-    Header header;
 
-    while(decode(buff, header, body))
+    uint32_t minLen = sizeof(Header) + sizeof(RPC_Meta);
+    // while(decode(buff, header, body))
+    while(buff->readableBytes() >= minLen)
     {
-        if(header.status == 0) //0请求 | 1回应
+        Header header;
+        RPC_Meta meta;
+        std::string body;
+        
+        if(!decode(buff, header, meta, body)) break;
+
+        //此时的body中存储的是序列化后的数据，需要反序列化
+        if(header.Flags == 0) //0请求 | 1回应
         {
-            // if(header.totalLen < body.size()) continue;
-
-            CLRPC::request req;
-            if(!req.ParseFromString(body))
+            uint32_t methodId = meta.method_id;
+            auto it = handles_.find(methodId);
+            if(it != handles_.end())
             {
-                conn->shutdown();
-                return;
+                auto res = it->second(body);
+                if(res)
+                {
+                    Buffer sendBuff;
+                    encode(&sendBuff, 1, 1, meta, *res);
+                    conn->send(&sendBuff);
+                }
             }
-
-            std::string result = handleMessage(req.message());
-            CLRPC::response rep;
-            rep.set_message(result);
-
-            uint16_t reqId = header.id;
-            uint16_t status = 1;
-
-            Buffer buff;
-            encode(&buff, reqId, status, rep);
-            conn->send(&buff);
+            else 
+            {
+                // LOG_INFO<<"一个非法函数调用";
+                // meta.err_code = kValidFunc; 
+                
+            }
         }
     }
 }
+
 
 std::string RPCServer::handleMessage(std::string msg)
 {
@@ -62,3 +67,4 @@ void RPCServer::start()
     if(started_) return;
     tcpServer_.start();
 }
+

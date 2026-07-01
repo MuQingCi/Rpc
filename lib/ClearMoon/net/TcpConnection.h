@@ -8,11 +8,8 @@
 #include "InetAddress.h"
 #include "Socket.h"
 #include "net/Buffer.h"
-
-#include <cstddef>
-#include <memory>
-#include <string>
-#include <sys/types.h>
+#include "net/TimerId.h"
+#include "net/Timer.h"
 
 namespace clearmoon 
 {
@@ -50,7 +47,6 @@ public:
     void send(Buffer* buff);
     void send(const std::string& message);
     void send(const void*data, size_t len);
-    void sendInLoop(const void*data, size_t len);
 
     // ========== 文件发送接口 ==========
     /**
@@ -58,7 +54,6 @@ public:
      * @param filePath 文件路径
      */
     void sendFile(const std::string& filePath);
-    void sendFileInLoop(const std::string& filePath);
 
 private:
     enum StateE{
@@ -68,15 +63,35 @@ private:
         kDisConnected
     };
 
+    //发送函数
+    void sendInLoop(const void*data, size_t len);
+
+    //文件发送函数
+    void sendFileInLoop(const std::string& filePath);
+
+    //处理对应消息函数
     void handleRead();
     void handleWrite();
     void handleClose();
     void handleError();
 
+    //优雅关闭以及强制关闭
     void shutdownInLoop();
     void forceCloseInLoop();
 
+    /**
+     * @brief 定时器相关函数
+            resetIdleTimer()
+            onIdleTimeout
+     * 
+     */
+    //重置空闲处理定时器
+    void resetIdleTimer();
+    //执行清理空闲连接任务
+    void onIdleTimeout();
+
     void setState(StateE s) { state_ = s; }
+
     EventLoop* loop_;
     Channel channel_;
     Socket socket_;
@@ -86,9 +101,11 @@ private:
     std::string name_;
     StateE state_{kConnecting};
 
+    //读写Buffer
     Buffer writeBuffer_;
     Buffer readBuffer_;
 
+    //各类回调函数
     ConnectionCallback connectionCallback_;
     MessageCallback messageCallback_;
     WriteCompleteCallback writeCompleteCallback_;
@@ -100,6 +117,15 @@ private:
     off_t fileTotalSize_ = 0;    // 文件总大小
     bool sendingFile_ = false;   // 是否正在发送文件
 
+    //========== 定时器Id ==========
+    TimerId readTimerId_;
+    TimerId writeTimerId_;
+    TimerId retransmissionTimerId_;
+
+    //定时清理空闲连接定时器
+    TimerId idleTimerId_;
+    
+    const double kTimeoutSeconds_ = 60;  //超时时间
 };
 }
 }

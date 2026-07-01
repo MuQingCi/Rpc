@@ -57,6 +57,11 @@ public:
     {
         return std::abs(rhs.getMicroSecond() - microSecondsSinceEpoch_);
     }
+
+    bool operator<(const Timestamp& rhs) const
+    {
+        return microSecondsSinceEpoch_ < rhs.microSecondsSinceEpoch_;
+    }
     
 private:
     int64_t microSecondsSinceEpoch_;

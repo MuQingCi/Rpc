@@ -1,16 +1,10 @@
 #include "TcpConnection.h"
-#include "Channel.h"
 #include "Log/Logger.h"
-#include "Timestamp.h"
+#include "net/TimerId.h"
 
-#include <cassert>
-#include <cerrno>
-#include <cstddef>
 #include <fcntl.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
-#include <unistd.h>
-#include <utility>
 
 using namespace clearmoon;
 using namespace clearmoon::net;
@@ -43,8 +37,13 @@ void TcpConnection::connectEstablelished()
 {
     loop_->assertInLoopThread();
     assert(state_ == kConnecting);
+
     channel_.enableReading();
     setState(kConnected);
+
+    //连接建立时启动IdleTimer
+    resetIdleTimer();
+
     if(connectionCallback_) 
         connectionCallback_(shared_from_this());
 }
@@ -57,6 +56,14 @@ void TcpConnection::connectDestroyed()
     {
         setState(kDisConnected);
     }
+
+    //把空闲清理定时器置空
+    if(idleTimerId_.valid())
+    {
+        loop_->cancel(idleTimerId_);
+        idleTimerId_ = TimerId();
+    }
+
     // 不需要先 disableAll()，channel_.remove() 内部会完成 epoll 摘除
     channel_.remove();
 }
@@ -102,6 +109,23 @@ void TcpConnection::send(const void* data, size_t len)
     }
 }
 
+// ========== 文件发送接口 ==========
+void TcpConnection::sendFile(const std::string& filePath)
+{
+    if(state_ != kConnected) return;
+
+    if(loop_->isInThread())
+    {
+        sendFileInLoop(filePath);
+    }
+    else
+    {
+        loop_->runInLoop([this, filePath] { sendFileInLoop(filePath); });
+    }
+}
+
+
+//---------------private---------------
 void TcpConnection::sendInLoop(const void* data, size_t len)
 {
     loop_->assertInLoopThread();
@@ -142,22 +166,6 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
         shutdownInLoop();
 }
 
-
-// ========== 文件发送接口 ==========
-void TcpConnection::sendFile(const std::string& filePath)
-{
-    if(state_ != kConnected) return;
-
-    if(loop_->isInThread())
-    {
-        sendFileInLoop(filePath);
-    }
-    else
-    {
-        loop_->runInLoop([this, filePath] { sendFileInLoop(filePath); });
-    }
-}
-
 void TcpConnection::sendFileInLoop(const std::string& filePath)
 {
     loop_->assertInLoopThread();
@@ -195,7 +203,7 @@ void TcpConnection::sendFileInLoop(const std::string& filePath)
 }
 
 
-//---------------private---------------
+
 void TcpConnection::handleRead()
 {
     loop_->assertInLoopThread();
@@ -206,6 +214,9 @@ void TcpConnection::handleRead()
     Timestamp t = Timestamp::now();
     if(n > 0 )
     {
+        //重置空闲处理定时器
+        resetIdleTimer();
+
         if(messageCallback_) messageCallback_(shared_from_this(), &readBuffer_, t);
     }
     else if(n == 0)
@@ -225,6 +236,9 @@ void TcpConnection::handleWrite()
     loop_->assertInLoopThread();
 
     if(!channel_.isWriting()) return;
+
+    //重置空闲处理定时器
+    resetIdleTimer();
 
     // ========== 先排空 writeBuffer_（比如文件模式下响应头可能还未发送完）==========
     if(writeBuffer_.readableBytes() > 0)
@@ -360,4 +374,23 @@ void TcpConnection::forceCloseInLoop()
     loop_->assertInLoopThread();
     if(state_ == kConnected || state_ == kDisConnecting)
         handleClose();
+}
+
+void TcpConnection::resetIdleTimer()
+{
+    //若空闲处理定时器已经存在则先cancel再重新添加
+    if(idleTimerId_.valid())
+    {
+        loop_->cancel(idleTimerId_);
+        idleTimerId_ = TimerId();
+    }
+
+    idleTimerId_ = loop_->runAfter(kTimeoutSeconds_, [this] { onIdleTimeout(); });
+}
+
+void TcpConnection::onIdleTimeout()
+{ 
+    loop_->assertInLoopThread();
+    // shutdown();
+    forceClose();
 }

@@ -2,37 +2,44 @@
 #include "message.pb.h"
 #include "net/Buffer.h"
 #include "net/Callbacks.h"
-#include "toolFunc.h"
-#include <future>
+#include "net/Log/Logger.h"
+#include <cstdint>
 #include <mutex>
+#include <utility>
 
-RPCClient::RPCClient(EventLoop* loop, const InetAddress& serverAddr) : tcpClient_(loop, serverAddr), nextId_(1)
+RPCClient::RPCClient(EventLoop* loop, const InetAddress& serverAddr) : tcpClient_(loop, serverAddr), nextSeq_(1)
 {
     tcpClient_.setConnectionCallback([this](TcpConnectionPtr conn){ onConnection(conn);});
+    
     tcpClient_.setMessageCallback([this](const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm) { onMessage(conn, buff, tm); });
 }
 
 void RPCClient::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm)
 {
-    std::string body;
-    Header header;
-    while(decode(buff, header, body))
-    {
-        if(header.status == 1) //0请求/1响应
-        {
-            CLRPC::response res;
-            if(!res.ParseFromString(body)) continue;;
-            
-            std::unique_lock<std::mutex> lock(mutex_);
+    LOG_INFO<< "New Message recived!";
 
-            auto it = pending_.find(header.id);
+    uint32_t minLen = sizeof(Header) + sizeof(RPC_Meta);
+
+    //while中只解码，把业务数据body传给pending[it]->second后会在
+    //lambda表达式中反序列化
+    while(buff->readableBytes() >= minLen)
+    {
+        Header header{};
+        RPC_Meta meta{};
+        std::string body;
+
+        if(!decode(buff, header, meta, body)) break;
+
+        if(header.Flags == 1)
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            auto it = pending_.find(meta.seq);
             if(it != pending_.end())
             {
-                it->second.set_value(std::move(res));
+                it->second(body);
                 pending_.erase(it);
             }
-        }
-        
+        }   
     }
 }
 
@@ -41,21 +48,3 @@ void RPCClient::start()
     tcpClient_.connect();
 }
 
-CLRPC::response RPCClient::Call(CLRPC::request& req)
-{
-    uint16_t id = nextId_++;
-    
-    std::promise<CLRPC::response> prom;
-    std::future<CLRPC::response> fut = prom.get_future();
-
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        pending_[id] = std::move(prom);
-    }
-
-    Buffer sendBuff;
-    encode(&sendBuff, id, 0, req);
-    conn_->send(&sendBuff);
-
-    return fut.get();
-}
