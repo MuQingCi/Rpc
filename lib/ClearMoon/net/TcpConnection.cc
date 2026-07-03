@@ -2,12 +2,59 @@
 #include "Log/Logger.h"
 #include "net/TimerId.h"
 
+#include <chrono>
+#include <cstdint>
 #include <fcntl.h>
+#include <random>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 using namespace clearmoon;
 using namespace clearmoon::net;
+
+const uint32_t TcpConnection::RetransmitEntry::kBaseTimeout = 1;    //初始超时重传时间为1000ms
+
+const uint32_t TcpConnection::RetransmitEntry::kMaxTimeout = 10;    //最大延迟为10s
+
+thread_local std::mt19937 rng(std::random_device{}());
+
+namespace clearmoon 
+{
+namespace net 
+{
+//指数退避计时函数
+//随机抖动版本
+std::chrono::milliseconds caculate_backoff_jitter(
+    uint32_t base_delay_ms,
+    uint32_t retries,
+    uint32_t max_delay_ms,
+    std::mt19937& rng
+)
+{
+    uint64_t cap_ms = base_delay_ms;
+
+    for(int i=0; i<retries;i++)
+    {
+        if(cap_ms > max_delay_ms / 2)
+        {
+            cap_ms = max_delay_ms;
+            break;
+        }
+        cap_ms *=2;
+    }
+
+    cap_ms = std::min(cap_ms, static_cast<uint64_t>(max_delay_ms));
+
+    std::uniform_int_distribution<uint64_t> dist(0, cap_ms);
+    auto jitter_ms = dist(rng);
+
+    return std::chrono::milliseconds(jitter_ms);
+}
+}
+}
+
+
 
 TcpConnection::TcpConnection(EventLoop* loop, std::string name, 
                             Socket socket, InetAddress& localAddr, 
@@ -31,6 +78,24 @@ TcpConnection::~TcpConnection()
     assert(state_ == kDisConnected);
     if(state_ != kDisConnected)
         forceClose();
+
+    if(idleTimerId_.valid())
+    {
+        loop_->cancel(idleTimerId_);
+        idleTimerId_ = TimerId();
+    }
+    
+    if(!pendingRetrans_.empty())
+    {
+        for(auto&kv : pendingRetrans_)
+        {
+            if(kv.second.timerId.valid())
+            {
+                loop_->cancel(kv.second.timerId);
+            }
+        }
+        pendingRetrans_.clear();
+    }
 }
 
 void TcpConnection::connectEstablelished()
@@ -62,6 +127,18 @@ void TcpConnection::connectDestroyed()
     {
         loop_->cancel(idleTimerId_);
         idleTimerId_ = TimerId();
+    }
+    
+    if(!pendingRetrans_.empty())
+    {
+        for(auto&kv : pendingRetrans_)
+        {
+            if(kv.second.timerId.valid())
+            {
+                loop_->cancel(kv.second.timerId);
+            }
+        }
+        pendingRetrans_.clear();
     }
 
     // 不需要先 disableAll()，channel_.remove() 内部会完成 epoll 摘除
@@ -108,6 +185,88 @@ void TcpConnection::send(const void* data, size_t len)
         loop_->runInLoop([this, buf]{ sendInLoop(buf->data(), buf->size()); });
     }
 }
+
+//可靠传输（支持超时重传)
+void TcpConnection::sendWithRetransmit(const void*data, size_t len, uint64_t seq)
+{
+    //构建名为SendFunc的lambda函数
+    auto SendFunc = [this, data = std::string(static_cast<const char*>(data), len), seq] { 
+        //构造超时重传上下文
+        RetransmitEntry entry;
+        entry.seq = seq;
+        entry.data = data;
+        entry.retries = 0;
+        send(entry.data.data(), entry.data.size());
+
+        //填充待处理重传map并启动超时重传定时器
+        pendingRetrans_[seq] = std::move(entry);
+        resetRetransmitTimer(pendingRetrans_[seq]);
+    };
+
+    //确保SendFunc位于io线程中被执行
+    if(loop_->isInThread())
+    {
+        SendFunc();
+    }else {
+        loop_->runInLoop(std::move(SendFunc));
+    }
+}
+
+void TcpConnection::sendWithRetransmit(Buffer* buffer, uint64_t seq)
+{
+    auto SendFunc = [this, buffer, seq]
+    {
+        //该函数一定位于io线程中运行
+        RetransmitEntry entry;
+        entry.seq = seq;
+        entry.data = std::string(buffer->peek(), buffer->readableBytes());
+        entry.retries = 0;
+
+        sendInLoop(buffer->peek(), buffer->readableBytes());
+
+        pendingRetrans_[seq] = std::move(entry);
+        resetRetransmitTimer(pendingRetrans_[seq]);
+    };
+
+    //确保SendFunc位于io线程中被执行
+    if(loop_->isInThread())
+    {
+        SendFunc();
+    }else {
+        loop_->runInLoop(std::move(SendFunc));
+    }
+}
+
+void TcpConnection::ackReceived(uint64_t seq)
+{
+    if(loop_->isInThread())
+    {
+        auto it = pendingRetrans_.find(seq);
+        if(it != pendingRetrans_.end())
+        {
+            if(it->second.timerId.valid())
+            {
+                loop_->cancel(it->second.timerId);
+            }
+            pendingRetrans_.erase(seq);
+        }
+    }
+    else {
+        loop_->runInLoop([this, seq]{
+            auto it = pendingRetrans_.find(seq);
+            if(it != pendingRetrans_.end())
+            {
+                if(it->second.timerId.valid())
+                {
+                    loop_->cancel(it->second.timerId);
+                }
+                pendingRetrans_.erase(seq);
+            }
+        });
+
+    }
+}
+
 
 // ========== 文件发送接口 ==========
 void TcpConnection::sendFile(const std::string& filePath)
@@ -352,6 +511,24 @@ void TcpConnection::handleClose()
     fileTotalSize_ = 0;
     sendingFile_ = false;
 
+    if(idleTimerId_.valid())
+    {
+        loop_->cancel(idleTimerId_);
+        idleTimerId_ = TimerId();
+    }
+    
+    if(!pendingRetrans_.empty())
+    {
+        for(auto&kv : pendingRetrans_)
+        {
+            if(kv.second.timerId.valid())
+            {
+                loop_->cancel(kv.second.timerId);
+            }
+        }
+        pendingRetrans_.clear();
+    }
+
     if(closeCallback_)
         closeCallback_(shared_from_this());
 }
@@ -376,6 +553,44 @@ void TcpConnection::forceCloseInLoop()
         handleClose();
 }
 
+void TcpConnection::resetRetransmitTimer(RetransmitEntry& entry)
+{
+    if(entry.timerId.valid())
+    {
+        loop_->cancel(entry.timerId);
+        entry.timerId = TimerId();
+    }
+
+    //指数退避计算时间
+    auto timeout = caculate_backoff_jitter(RetransmitEntry::kBaseTimeout, entry.retries, RetransmitEntry::kMaxTimeout, rng);
+
+    entry.timerId = loop_->runAfter(timeout.count() / 1000.0, [this, seq = entry.seq]{
+        onRetransmitTimeout(seq);
+    });
+}
+
+void TcpConnection::onRetransmitTimeout(uint64_t seq)
+{
+    loop_->assertInLoopThread();
+    auto it = pendingRetrans_.find(seq);
+    if(it == pendingRetrans_.end()) return;
+
+    auto &entry = it->second;
+
+    if(entry.retries >= RetransmitEntry::kMaxRetries) 
+    {
+        LOG_WARNING<< "超时重传超出最大重传数, seq = "<<seq;
+        pendingRetrans_.erase(it);
+        forceCloseInLoop();
+        return;
+    }
+    
+    sendInLoop(entry.data.data(), entry.data.size());
+    entry.retries++;
+    resetRetransmitTimer(entry);
+}
+
+
 void TcpConnection::resetIdleTimer()
 {
     //若空闲处理定时器已经存在则先cancel再重新添加
@@ -392,5 +607,5 @@ void TcpConnection::onIdleTimeout()
 { 
     loop_->assertInLoopThread();
     // shutdown();
-    forceClose();
+    forceCloseInLoop();
 }

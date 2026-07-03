@@ -1,5 +1,4 @@
 #include "TcpClient.h"
-#include "Log/Logger.h"
 
 using namespace clearmoon;
 using namespace clearmoon::net;

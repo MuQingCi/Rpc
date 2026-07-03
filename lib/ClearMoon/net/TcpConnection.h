@@ -10,6 +10,9 @@
 #include "net/Buffer.h"
 #include "net/TimerId.h"
 #include "net/Timer.h"
+#include <cstdint>
+#include <map>
+#include <string>
 
 namespace clearmoon 
 {
@@ -48,6 +51,12 @@ public:
     void send(const std::string& message);
     void send(const void*data, size_t len);
 
+    //可靠传输（支持超时重传)
+    void sendWithRetransmit(const void*data, size_t len, uint64_t seq);
+    void sendWithRetransmit(Buffer* buffer, uint64_t seq);
+
+    void ackReceived(uint64_t seq);
+
     // ========== 文件发送接口 ==========
     /**
      * @brief 使用 sendfile 零拷贝发送文件
@@ -81,10 +90,28 @@ private:
 
     /**
      * @brief 定时器相关函数
+            resetRetransmitTimer()
+            onRetransmitTimeout()
             resetIdleTimer()
             onIdleTimeout
      * 
      */
+    //超时重传相关
+    struct RetransmitEntry{
+        uint64_t seq; //消息序列号
+        std::string data;
+        uint32_t retries = 0;
+        TimerId timerId;
+        static const uint32_t kMaxRetries = 5;
+        static const uint32_t kBaseTimeout;
+        static const uint32_t kMaxTimeout;
+    };
+
+    void resetRetransmitTimer(RetransmitEntry& entry);
+    void onRetransmitTimeout(uint64_t seq);
+
+    std::map<uint64_t, RetransmitEntry> pendingRetrans_;
+
     //重置空闲处理定时器
     void resetIdleTimer();
     //执行清理空闲连接任务
@@ -120,8 +147,8 @@ private:
     //========== 定时器Id ==========
     TimerId readTimerId_;
     TimerId writeTimerId_;
-    TimerId retransmissionTimerId_;
 
+    //空闲定时器处理相关
     //定时清理空闲连接定时器
     TimerId idleTimerId_;
     
