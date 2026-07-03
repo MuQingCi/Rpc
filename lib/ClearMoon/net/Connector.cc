@@ -1,5 +1,7 @@
 #include "Connector.h"
 #include "Log/Logger.h"
+#include "net/Socket.h"
+#include "net/TimerId.h"
 
 #include <cassert>
 #include <cerrno>
@@ -39,7 +41,15 @@ void Connector::stop()
             }
             sock_ = Socket(); // 释放旧的 socket
         }
+
+        //cancel连接超时定时器
+        if(connectTimeoutId_.valid())
+        {
+            loop_->cancel(connectTimeoutId_);
+            connectTimeoutId_ = TimerId{};
+        }
     });
+
 }
 
 void Connector::startInLoop()
@@ -75,6 +85,11 @@ void Connector::connect()
         channel_->setWriteCallback([this] { handleWrite(); });
         channel_->setErrorCallback([this] { handleError(); });
         channel_->enableWriting();
+
+        //启动定时器
+        connectTimeoutId_ = loop_->runAfter(connectTimeout_, [this]{
+            handleTimeout();
+        });
     }
     else
     {
@@ -105,6 +120,13 @@ void Connector::handleWrite()
         return;
     }
 
+    //连接成功，cancel连接超时定时器
+    if(connectTimeoutId_.valid())
+    {
+        loop_->cancel(connectTimeoutId_);
+        connectTimeoutId_ = TimerId{};
+    }
+
     setState(kConnected);
     channel_->remove();
     channel_.reset();
@@ -123,7 +145,31 @@ void Connector::handleError()
         channel_.reset();
         sock_ = Socket();
         setState(kDisconnected);
+
+        //cancel连接超时定时器
+        if(connectTimeoutId_.valid())
+        {
+            loop_->cancel(connectTimeoutId_);
+            connectTimeoutId_ = TimerId{};
+        }
     }
+}
+
+void Connector::handleTimeout()
+{
+    loop_->assertInLoopThread();
+
+    LOG_WARNING<< "连接服务器: " << serverAddr_.toIpPort() << "超时";
+
+    if(state_ != kConnecting) return;
+
+    channel_->remove();
+    channel_.reset();
+
+    sock_ = Socket();
+    setState(kDisconnected);
+
+    connectTimeoutId_ = TimerId{};
 }
 
 void Connector::retry()

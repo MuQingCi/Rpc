@@ -6,6 +6,7 @@
 #include "EventLoop.h"
 #include "InetAddress.h"
 #include "Socket.h"
+#include "net/TimerId.h"
 
 #include <functional>
 #include <memory>
@@ -33,6 +34,10 @@ private:
     void connect();
     void handleWrite();   // 连接结果到达（EPOLLOUT）
     void handleError();   // 连接失败
+    
+    //超时处理函数
+    void handleTimeout();
+
     void retry();         // 重试（可选）
     void setState(int s) { state_ = s; }
 
@@ -44,6 +49,11 @@ private:
     std::unique_ptr<Channel> channel_;
     Socket sock_;
     NewConnectionCallback newConnCallback_;
+
+    //连接超时定时器
+    TimerId connectTimeoutId_;
+
+    double connectTimeout_ = 1; //1s
 };
 
 } // namespace net
