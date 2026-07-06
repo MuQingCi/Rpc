@@ -12,7 +12,7 @@
 
 int main()
 {
-    AsyncLogger asyncLogger("ClearMoon_RPC", 1 * 1024, LOG_DIR);
+    AsyncLogger asyncLogger("ClearMoon_RPC_Client", 1 * 1024, LOG_DIR);
     Logger::set_AsyncLogger(&asyncLogger);
     asyncLogger.start();
     Logger::set_GlobalLevel(net::INFO);
@@ -29,11 +29,18 @@ int main()
         while (!rpcClient.connected())
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        CLRPC::request req;
-        req.set_message("Hello RPC Server!");
+        CLRPC::EchoRequest req;
+        req.set_msg("Hello RPC Server!");
 
-        CLRPC::response res = rpcClient.Call(req);
-        std::cout << "Response: " << res.message() << std::endl;
+        try
+        {
+            CLRPC::EchoResponse res = rpcClient.Call<CLRPC::EchoRequest, CLRPC::EchoResponse>(req);
+            std::cout << "Response: " << res.reply() << " (code=" << res.code() << ")" << std::endl;
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "RPC call failed: " << e.what() << std::endl;
+        }
 
         loop.quit();
     });
