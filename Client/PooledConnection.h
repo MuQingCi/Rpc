@@ -14,7 +14,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <sys/types.h>
+#include <utility>
 
 namespace cmlib = clearmoon::net; 
 
@@ -31,8 +33,9 @@ public:
 
     //成员函数
 
-    //连接与断开连接
+    //连接
     void Connect() { tcpClient_.connect(); }
+    //断开连接
     void Disconnect() { tcpClient_.disconnect();}
 
     bool isConnected() const { return conn_&&conn_->connected(); }
@@ -62,36 +65,51 @@ public:
         conn_->send(buff);
     }
 private:
+    //请求上下文
     struct PendingContext
     {
         std::shared_ptr<void> awaiter;  //类型擦除
+        //函数闭包
         std::function<void()> resume;
-        cmlib::TimerId timerId;
-        uint64_t seq;
-        bool completed = false;
+        std::function<void()> cancel;
+        std::function<void(std::string)> setResponse;
+
+        
+        cmlib::TimerId timerId;   //超时取消定时器
+        uint64_t seq;             //请求序列号
+        bool completed = false;   //是否完成
+
+        //重传相关
+        std::string requestPayload;
+        size_t retriesLeft = 4;   //剩余重传次数
+        std::chrono::milliseconds retryInterval;            //重试间隔
     };  
 
     //三个回调
     void onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm);
     void onConnection(const cmlib::TcpConnectionPtr& conn);
-    void OnTimeout(uint64_t seq);
+    void onTimeout(uint64_t seq);
 
     //成员变量
+    //网络相关
     cmlib::TcpClient tcpClient_;
     cmlib::TcpConnectionPtr conn_;
     cmlib::EventLoop* loop_;
-    size_t index_;
+    size_t index_;  //该连接在连接池中的标识
 
-    std::atomic<ConnState> state_{ConnState::IDLE};
-    std::atomic<int>activerequests_;
+    std::atomic<ConnState> state_{ConnState::IDLE};     //连接状态
+    std::atomic<int>activerequests_;    //该连接中的活跃请求
 
+    //请求序列号
     uint64_t nextSeq{1};
+    //序列号对应的Awaiter
     std::map<uint64_t, PendingContext> pending_;
 
     mutable std::mutex mutex_;;
 };
 
 
+//异步注册模板
 template<typename Request, typename Response>
 uint64_t PooledConnection::registerPendingAsync(std::shared_ptr<RpcAwaiter<Response>> awaiter, std::chrono::milliseconds timeout)
 {
@@ -105,8 +123,18 @@ uint64_t PooledConnection::registerPendingAsync(std::shared_ptr<RpcAwaiter<Respo
     ctx.resume = [awaiter]() mutable{
         awaiter->resume();
     };
- 
-    ctx.timerId = loop_->runAfter(timeout / 1000.0, [this,seq]() { OnTimeout(seq); });
+
+    ctx.setResponse = [awaiter](std::string body) mutable 
+    {
+        awaiter->setResponse(std::move(body));
+    };
+
+    ctx.cancel = [awaiter]() {
+        awaiter->setError();
+        awaiter->resume();
+    };
+
+    ctx.timerId = loop_->runAfter(timeout / 1000.0, [this,seq]() { onTimeout(seq); });
 
     ctx.completed = false;
     pending_[seq] = std::move(ctx);
