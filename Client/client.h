@@ -32,35 +32,7 @@
 //     double   jitterFactor  = 0.2;         ///< 随机抖动因子（0~0.5 之间）
 // };
 
-///=============================================================================
-/// @brief RPC调用超时异常
-///=============================================================================
-class RpcTimeoutException : public std::runtime_error
-{
-public:
-    explicit RpcTimeoutException(uint64_t seq, uint32_t timeoutMs)
-        : std::runtime_error("RPC call timeout, seq: " + std::to_string(seq)
-                             + ", timeout: " + std::to_string(timeoutMs) + "ms")
-        , seq_(seq)
-        , timeoutMs_(timeoutMs)
-    {}
-    uint64_t seq()      const noexcept { return seq_; }
-    uint32_t timeoutMs() const noexcept { return timeoutMs_; }
-private:
-    uint64_t seq_;
-    uint32_t timeoutMs_;
-};
-
-///=============================================================================
-/// @brief RPC连接异常（网络断开 / 重连失败）
-///=============================================================================
-class RpcConnectionException : public std::runtime_error
-{
-public:
-    explicit RpcConnectionException(const std::string& msg)
-        : std::runtime_error("RPC connection error: " + msg)
-    {}
-};
+#include "rpc_exceptions.h"
 
 ///=============================================================================
 /// @class RPCClient
@@ -273,11 +245,11 @@ private:
 template <typename Request, typename Response>
 Task<Response> RPCClient::CallAsync(Request& req, std::chrono::milliseconds timeout, uint32_t method_id)
 {
-    auto conn = connPool_.acquire();
+    auto conn = connPool_->acquire();
     uint64_t seq = 0;
-    auto awaiter = std::make_shared<RpcAwaiter<Response>>(conn->getLoop(),seq,timeout);
+    auto awaiter = std::make_shared<RpcAwaiter<Response>>(conn->getLoop(), seq, timeout);
 
-    conn->sendRequest(req, awaiter, timeout.count(), method_id);
+    conn->sendRequest(req, awaiter, timeout, method_id);
 
     co_return co_await *awaiter;
 }

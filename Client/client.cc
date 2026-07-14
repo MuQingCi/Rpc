@@ -30,24 +30,24 @@ RPCClient::RPCClient(EventLoop* loop, const InetAddress& serverAddr)
     //     { onMessage(conn, buff, tm); });
 }
 
-void RPCClient::start()
-{
-    // tcpClient_.connect();
-}
+// void RPCClient::start()
+// {
+//     // tcpClient_.connect();
+// }
 
-void RPCClient::stop()
-{
-    // reconnectEnabled_ = false;   // 停止任何进一步的重连尝试
-    // retryCount_ = 0;
-    // cancelAllPending();
-    // tcpClient_.disconnect();
-
-    // if(reconnectTimerId_.valid())
-    // {
-    //     loop_->cancel(reconnectTimerId_);
-    //     reconnectTimerId_ = TimerId{};
-    // }
-}
+// void RPCClient::stop()
+// {
+//     // reconnectEnabled_ = false;   // 停止任何进一步的重连尝试
+//     // retryCount_ = 0;
+//     // cancelAllPending();
+//     // tcpClient_.disconnect();
+//
+//     // if(reconnectTimerId_.valid())
+//     // {
+//     //     loop_->cancel(reconnectTimerId_);
+//     //     reconnectTimerId_ = TimerId{};
+//     // }
+// }
 
 // void RPCClient::setReconnectConfig(const ReconnectConfig& config)
 // {

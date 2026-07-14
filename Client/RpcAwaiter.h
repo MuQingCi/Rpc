@@ -1,7 +1,6 @@
 #ifndef CLEARMOON_RPC_RPCAWAITER_H
 #define CLEARMOON_RPC_RPCAWAITER_H
 
-#include "client.h"
 #include "net/EventLoop.h"
 #include <chrono>
 #include <coroutine>
@@ -11,6 +10,8 @@
 #include <utility>
 
 namespace cmlib = clearmoon::net;
+
+#include "rpc_exceptions.h"
 
 
 template<typename Response>
