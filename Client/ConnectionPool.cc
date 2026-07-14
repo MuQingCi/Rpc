@@ -1,6 +1,5 @@
 #include "ConnectionPool.h"
 #include "PooledConnection.h"
-#include "client.h"
 #include "net/Log/Logger.h"
 
 #include "net/EventLoop.h"

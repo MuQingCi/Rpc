@@ -4,7 +4,6 @@
 #include "net/Buffer.h"
 #include "net/Callbacks.h"
 #include "net/TcpClient.h"
-#include "RpcAwaiter.h"
 #include "toolFunc.h"
 
 #include <atomic>
@@ -19,7 +18,12 @@
 #include <sys/types.h>
 #include <utility>
 
-namespace cmlib = clearmoon::net; 
+namespace cmlib = clearmoon::net;
+
+// 前置声明，打破循环依赖
+// （RpcAwaiter.h → client.h → ConnectionPool.h → PooledConnection.h）
+template<typename Response>
+class RpcAwaiter;
 
 enum ConnState{
     IDLE,
@@ -53,11 +57,6 @@ public:
     size_t getIndex() const { return index_; }
     size_t activeRequest() const { return activerequests_.load(std::memory_order_relaxed); }
 
-
-    // //异步注册模板
-    // template<typename Request, typename Response>
-    // uint64_t registerPendingAsync(std::shared_ptr<RpcAwaiter<Response>> awaiter, std::chrono::milliseconds timeout);
-
     void removePending(uint64_t seq);
     void cancelAllPending();
 
@@ -70,9 +69,8 @@ public:
         conn_->send(buff);
     }
 
-
     template<typename Request, typename Response>
-    void sendRequest(const Request& request, 
+    void sendRequest(const Request& request,
                      std::shared_ptr<RpcAwaiter<Response>> awaiter,
                      std::chrono::milliseconds timeout,
                      uint32_t method_id);
@@ -81,16 +79,13 @@ private:
     struct PendingContext
     {
         std::shared_ptr<void> awaiter;  //类型擦除
-        //函数闭包
-        // std::function<void()> resume;
         std::function<void()> cancel;
-        // std::function<void(std::string)> setResponse;
         std::function<void(std::string)> onResponse;
-        
+
         cmlib::TimerId timerId;   //超时取消定时器
         uint64_t seq;             //请求序列号
         bool completed = false;   //是否完成
-    };  
+    };
 
     //三个回调
     void onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm);
@@ -115,46 +110,14 @@ private:
     mutable std::mutex mutex_;;
 };
 
-
-//异步注册模板
-// template<typename Request, typename Response>
-// uint64_t PooledConnection::registerPendingAsync(std::shared_ptr<RpcAwaiter<Response>> awaiter, std::chrono::milliseconds timeout)
-// {
-//     std::unique_lock<std::mutex> lock(mutex_);
-//     uint64_t seq = nextSeq++;
-
-//     PendingContext ctx;
-//     ctx.seq = seq;
-//     ctx.awaiter = awaiter;
-    
-//     ctx.resume = [awaiter]() mutable{
-//         awaiter->resume();
-//     };
-
-//     ctx.setResponse = [awaiter](std::string body) mutable 
-//     {
-//         awaiter->setResponse(std::move(body));
-//     };
-
-//     ctx.cancel = [awaiter,seq,this]() {
-//         awaiter->setError();
-//         awaiter->resume();
-//         if(conn_) conn_->ackReceived(seq);
-//         activerequests_.fetch_sub(1,std::memory_order_relaxed);
-//     };
-
-//     ctx.timerId = loop_->runAfter(timeout / 1000.0, [this,seq]() { onTimeout(seq); });
-
-//     ctx.completed = false;
-//     pending_[seq] = std::move(ctx);
-
-//     activerequests_.fetch_add(1, std::memory_order_relaxed);
-//     return seq;
-// }
-
+// ===================================================================
+// 以下需要 RpcAwaiter 的完整定义，因此 include 放在类定义之后
+// 打破了 PooledConnection.h → RpcAwaiter.h → client.h → ConnectionPool.h → PooledConnection.h 的循环
+// ===================================================================
+#include "RpcAwaiter.h"
 
 template<typename Request, typename Response>
-void PooledConnection::sendRequest(const Request& request, 
+void PooledConnection::sendRequest(const Request& request,
                     std::shared_ptr<RpcAwaiter<Response>> awaiter,
                     std::chrono::milliseconds timeout,
                     uint32_t method_id)
@@ -171,9 +134,9 @@ void PooledConnection::sendRequest(const Request& request,
     RPC_Meta meta;
     meta.seq = seq;
     meta.method_id = method_id;
-    meta.timeout = timeout.count();
+    meta.timeout = static_cast<uint32_t>(timeout.count());
     meta.err_code = 0;
-    
+
     //3.编码为Buffer
     Buffer sendBuff;
     encode(&sendBuff, 0, 1, meta, request);
@@ -192,19 +155,18 @@ void PooledConnection::sendRequest(const Request& request,
 
         ctx.cancel = [awaiter,seq,self]
         {
-            awaiter.setError();
-            awaiter.resume();
+            awaiter->setError();
+            awaiter->resume();
             if(self->conn_)
                 self->conn_->ackReceived(seq);
             self->activerequests_.fetch_sub(1,std::memory_order_relaxed);
-            
         };
 
         ctx.onResponse = [awaiter](std::string body){
-            awaiter.setResponse(std::move(body));
+            awaiter->setResponse(std::move(body));
             awaiter->resume();
         };
-        
+
         ctx.timerId = loop_->runAfter(timeout.count() / 1000.0, [self,seq]{ self->onTimeout(seq); });
 
         ctx.completed = false;

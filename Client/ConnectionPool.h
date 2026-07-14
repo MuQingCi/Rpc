@@ -93,7 +93,7 @@ private:
     std::atomic<size_t> rrIndex_{0};
 
     //健康检查相关
-    TimerId healthCheckTimerId_;
+    cmlib::TimerId healthCheckTimerId_;
     std::chrono::seconds healthCheckInterval_{5};
     
     mutable std::mutex mutex_;
