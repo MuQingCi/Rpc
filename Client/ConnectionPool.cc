@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <utility>
 
@@ -23,7 +24,7 @@ ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
 {
     for(size_t i = 0; i<poolSize; ++i)
     {
-        auto conn = std::make_unique<PooledConnection>(loop,serverAddr,i);
+        auto conn = std::make_shared<PooledConnection>(loop,serverAddr,i);
         conn->Connect();
         connections_.push_back(std::move(conn));
     }
@@ -42,7 +43,7 @@ ConnectionPool::~ConnectionPool()
 
 void ConnectionPool::startHealthCheck()
 {
-    healthCheckTimerId_ = loop_->runAfter(healthCheckInterval_.count(), [this] { doHealthCheck(); });
+    healthCheckTimerId_ = loop_->runEvery(healthCheckInterval_.count(), [this] { doHealthCheck(); });
 }
 
 void ConnectionPool::stopHealthCheck()
@@ -54,7 +55,7 @@ void ConnectionPool::stopHealthCheck()
     }
 }
 
-PooledConnection& ConnectionPool::acquire()
+ConnectionPool::Borrowed ConnectionPool::acquire()
 {
     switch (strategy_) {
         case LoadBalanceStrategy::RoundRobin :
@@ -70,8 +71,10 @@ PooledConnection& ConnectionPool::acquire()
 
 
 //负载均衡策略对应函数
-PooledConnection& ConnectionPool::acquireRoundRobin()
+ConnectionPool::Borrowed ConnectionPool::acquireRoundRobin()
 {
+    std::unique_lock<std::mutex> lock(mutex_);
+
     size_t n = size();
     size_t start = rrIndex_.fetch_add(1,std::memory_order_relaxed) % n;
 
@@ -80,36 +83,45 @@ PooledConnection& ConnectionPool::acquireRoundRobin()
         size_t index = (start+i) % n;
         auto& conn = connections_[index];
 
-        if(conn->isHealthy()) 
-            return *conn;
+        if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
+        {
+            conn->setState(ConnState::BUSY);
+            return Borrowed(conn);
+        }
     }
 
     throw RpcConnectionException("No Healthy Connection avaiable!");
 }
 
-PooledConnection& ConnectionPool::acquireLeastConnection()
+ConnectionPool::Borrowed ConnectionPool::acquireLeastConnection()
 {
-    PooledConnection* bestConnPtr = nullptr;
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    ConnPtr bestConnPtr = nullptr;
     size_t min = std::numeric_limits<size_t>::max();
 
     for(auto& conn : connections_)
     {
-        if(!conn->isHealthy()) continue;
-        int active = conn->activeRequest();
+        if(!conn->isHealthy() || conn->state() == ConnState::BUSY) continue;
+        size_t active = conn->activeRequest();
         if(active<min)
         {
             min = active;
-            bestConnPtr = conn.get();
+            bestConnPtr = conn;
         }
     }
     if(!bestConnPtr) 
         throw RpcConnectionException("No Healthy Connection avaiable!");
 
-    return *bestConnPtr;
+    bestConnPtr->setState(ConnState::BUSY);
+
+    return Borrowed(bestConnPtr);
 }
 
-PooledConnection& ConnectionPool::acquireRandom()
+ConnectionPool::Borrowed ConnectionPool::acquireRandom()
 {
+    std::unique_lock<std::mutex> lock(mutex_);
+
     thread_local std::mt19937 rng(std::random_device{}());
 
     size_t n = connections_.size();
@@ -121,24 +133,36 @@ PooledConnection& ConnectionPool::acquireRandom()
         size_t idex = dist(rng);
 
         auto& conn = connections_[idex];
-        if(conn->isHealthy()) return *conn;
+        if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
+        {
+            conn->setState(ConnState::BUSY);
+            return Borrowed(conn);
+        }
     }
     throw RpcConnectionException("No Healthy Connection avaiable!");
 }
 
 void ConnectionPool::doHealthCheck()
 {
-    for(auto& conn : connections_)
+    decltype(connections_) toReconnect;
     {
-        //检查是否处于连接状态
-        if(!conn->isConnected())
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        for(auto& conn : connections_)
         {
-            //断开则标记非健康且重连
-            conn->markUnHealthy();
-
-            loop_->runInLoop([&conn = *conn]{conn.Connect();});
-
-            LOG_INFO<< "ConnectionPool["<<conn->getIndex() << "]: Unhealthy, reconnecting...."; 
+            //检查是否处于连接状态
+            if((conn->state() == ConnState::IDLE || conn->state() == ConnState::UNHEALTHY) && !conn->isConnected())
+            {
+                //断开则标记非健康
+                conn->markUnHealthy();
+                toReconnect.push_back(conn);
+            }
         }
+    }
+    
+    for(auto& conn : toReconnect)
+    {
+        loop_->runInLoop([conn]{ conn->Connect(); });
+        LOG_INFO<< "ConnectionPool["<<conn->getIndex() << "]: Unhealthy, reconnecting...."; 
     }
 }

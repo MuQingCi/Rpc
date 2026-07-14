@@ -2,6 +2,8 @@
 #include "net/TimerId.h"
 #include "net/Log/Logger.h"
 
+#include <atomic>
+#include <mutex>
 #include <utility>
 
 PooledConnection::PooledConnection(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t Index) : loop_(loop),tcpClient_(loop,serverAddr),
@@ -14,17 +16,20 @@ index_(Index)
 
 void PooledConnection::removePending(uint64_t seq)
 {
+    std::unique_lock<std::mutex> lock(mutex_);
+    
     auto it = pending_.find(seq);
     if(it == pending_.end())
         return;
-    auto ctx = it->second;
+    auto& ctx = it->second;
     if(ctx.timerId.valid())
     {
         loop_->cancel(ctx.timerId);
         ctx.timerId = TimerId{};
     }
 
-    //TODO 处理目标定时器的awaiter
+    it->second.cancel();
+    pending_.erase(it);
 }
 void PooledConnection::cancelAllPending()
 {
@@ -45,14 +50,14 @@ void PooledConnection::cancelAllPending()
 
     for(auto& kv : pendingCopy)
     {
-        //TODO 处理awaiter;
+        kv.second.cancel();
     }
 }
 
 void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm)
 {
-    (void)conn;
-    (void)tm;
+    (void)conn; (void)tm;
+
     LOG_INFO << "RPCClient: " << index_ <<" received message";
 
     uint32_t minLen = sizeof(Header) + sizeof(RPC_Meta);
@@ -84,17 +89,17 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
                 auto it = pending_.find(meta.seq);
                 if (it != pending_.end())
                 {
-                    // 标记完成，onTimeout 见到 completed 会跳过
                     it->second.completed = true;
-
-                    // 取消超时定时器
-                    if (it->second.timerId.valid())
+                    if(it->second.timerId.valid())
                     {
                         loop_->cancel(it->second.timerId);
+                        it->second.timerId = TimerId{};
                     }
 
-                    callback = std::move(it->second.callback);
+                    callback = std::move(it->second.onResponse);
                     pending_.erase(it);
+
+                    activerequests_.fetch_sub(1,std::memory_order_relaxed);
                 }
             }
 
@@ -127,11 +132,25 @@ void PooledConnection::onConnection(const cmlib::TcpConnectionPtr& conn)
         conn_.reset();
         setState(ConnState::UNHEALTHY);
     }
-
 }
 
 
 void PooledConnection::onTimeout(uint64_t seq)
 {
+    std::unique_lock<std::mutex> lock(mutex_);
 
+    auto it = pending_.find(seq);
+    if(it == pending_.end()) return;
+
+    auto& ctx = it->second;
+
+    if(ctx.completed) return;
+    ctx.completed = true;
+
+    auto cancel = std::move(ctx.cancel);
+
+    pending_.erase(it);
+    lock.unlock();
+    
+    if(cancel) cancel();
 }

@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace cmlib = clearmoon::net;
@@ -29,29 +30,56 @@ public:
 
     ~ConnectionPool();
 
+    //RAII借用句柄
+    /**
+     * @brief 内部封装了池化连接的shared_ptr,创建时自动赋值使得对应指针计数+1,析构时则自动将其计数-1
+     * 
+     */
+    class Borrowed
+    {
+    public:
+        Borrowed(std::shared_ptr<PooledConnection> conn) : conn_(std::move(conn)){}
+        ~Borrowed() 
+        { 
+            if(conn_)
+            {
+                conn_->returnToIdleIfBusy();
+            }
+        };
+
+        //运算符重载--以便该类可以像原始指针一样使用
+        PooledConnection* operator->() const { return conn_.get(); }
+        PooledConnection& operator*() const { return *conn_; }
+
+        //禁止拷贝
+        Borrowed(const Borrowed&) = delete;
+        Borrowed& operator=(const Borrowed&) = delete;
+
+        //允许移动
+        Borrowed(Borrowed&&) = default;
+        Borrowed& operator=(Borrowed&&) = default;
+    private:
+        std::shared_ptr<PooledConnection> conn_;        
+    };
+
     //开始/关闭心跳检查
     void startHealthCheck();
     void stopHealthCheck();
 
-    //获取一条可用的连接
-    PooledConnection& acquire();
-
-    void release(PooledConnection& conn)
-    {
-        (void) conn;
-    }
+    //获取一条可用的连接(Borrowed类)
+    Borrowed acquire();
 
     size_t size() const { return connections_.size(); }
 
 private:
     //负载均衡策略对应函数
-    PooledConnection& acquireRoundRobin();
-    PooledConnection& acquireLeastConnection();
-    PooledConnection& acquireRandom();
+    Borrowed acquireRoundRobin();
+    Borrowed acquireLeastConnection();
+    Borrowed acquireRandom();
 
     void doHealthCheck();
 
-    using ConnPtr = std::unique_ptr<PooledConnection>; 
+    using ConnPtr = std::shared_ptr<PooledConnection>; 
 
     //网络相关
     cmlib::EventLoop* loop_;
@@ -68,5 +96,6 @@ private:
     TimerId healthCheckTimerId_;
     std::chrono::seconds healthCheckInterval_{5};
     
+    mutable std::mutex mutex_;
 };
 #endif

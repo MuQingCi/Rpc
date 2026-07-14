@@ -17,10 +17,10 @@ template<typename Response>
 class RpcAwaiter
 {
 public:
-    RpcAwaiter(cmlib::EventLoop* loop, uint64_t seq, std::chrono::milliseconds timeout);
+    RpcAwaiter(cmlib::EventLoop* loop, uint64_t seq, std::chrono::milliseconds timeout) : loop_(loop), seq_(seq), timeout_(timeout){}
 
     //----Awaiter接口----
-    bool await_ready() const noexcept { return false; }
+    bool await_ready() const noexcept { return error_ || !response_.empty(); }
     void await_suspend(std::coroutine_handle<> handle) noexcept { 
         handle_ = handle;
     }
@@ -56,10 +56,13 @@ public:
         }
     }
 
+    uint64_t seq() const { return seq_; }
+    void setSeq(uint64_t seq) { seq_ = seq; }
+
 private:
     cmlib::EventLoop* loop_;
     uint64_t seq_;
-    std::chrono::microseconds timeout_;
+    std::chrono::milliseconds timeout_;
     std::coroutine_handle<> handle_;
     std::string response_;
     bool error_{false};
