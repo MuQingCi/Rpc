@@ -35,6 +35,14 @@ EventLoop::EventLoop(): tid_(Current::tid()),
 EventLoop::~EventLoop()
 {
     quit();
+
+    // 析构函数体内提前移除 weakChannel_，防止隐式析构按成员声明
+    // 反序销毁 poller_ 先于 weakChannel_ 被释放，导致 SEGV
+    if (weakChannel_)
+    {
+        weakChannel_->remove();
+        weakChannel_.reset();
+    }
 }
 
 void EventLoop::loop()

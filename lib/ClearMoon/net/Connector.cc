@@ -25,28 +25,30 @@ Connector::~Connector()
 
 void Connector::start()
 {
-    loop_->runInLoop([this] { startInLoop(); });
+    auto self = shared_from_this();
+    loop_->runInLoop([self] { self->startInLoop(); });
 }
 
 void Connector::stop()
 {
-    loop_->runInLoop([this] {
-        if (state_ == kConnecting)
+    auto self = shared_from_this();
+    loop_->runInLoop([self] {
+        if (self->state_ == kConnecting)
         {
-            setState(kDisconnected);
-            if (channel_) 
+            self->setState(kDisconnected);
+            if (self->channel_) 
             {
-                channel_->remove();
-                channel_.reset();
+                self->channel_->remove();
+                self->channel_.reset();
             }
-            sock_ = Socket(); // 释放旧的 socket
+            self->sock_ = Socket(); // 释放旧的 socket
         }
 
         //cancel连接超时定时器
-        if(connectTimeoutId_.valid())
+        if(self->connectTimeoutId_.valid())
         {
-            loop_->cancel(connectTimeoutId_);
-            connectTimeoutId_ = TimerId{};
+            self->loop_->cancel(self->connectTimeoutId_);
+            self->connectTimeoutId_ = TimerId{};
         }
     });
 

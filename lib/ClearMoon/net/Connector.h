@@ -18,7 +18,8 @@ namespace net
 
 using NewConnectionCallback = std::function<void(Socket, InetAddress)>;
 
-class Connector : public noncopyable
+class Connector : public noncopyable,
+                  public std::enable_shared_from_this<Connector>
 {
 public:
     Connector(EventLoop* loop, const InetAddress& serverAddr);

@@ -151,7 +151,8 @@ void TcpConnection::shutdown()
     if(state_ == kConnected)
     {
         setState(kDisConnecting);
-        loop_->runInLoop([this] { shutdownInLoop(); });
+        auto self = shared_from_this();
+        loop_->runInLoop([self] { self->shutdownInLoop(); });
     }
 }
 
@@ -160,7 +161,8 @@ void TcpConnection::forceClose()
     if(state_ == kConnected || state_ == kDisConnecting)
     {
         setState(kDisConnecting);
-        loop_->runInLoop([this]{ forceCloseInLoop(); });
+        auto self = shared_from_this();
+        loop_->runInLoop([self]{ self->forceCloseInLoop(); });
     }
 }
 
@@ -214,27 +216,7 @@ void TcpConnection::sendWithRetransmit(const void*data, size_t len, uint64_t seq
 
 void TcpConnection::sendWithRetransmit(Buffer* buffer, uint64_t seq)
 {
-    auto SendFunc = [this, buffer, seq]
-    {
-        //该函数一定位于io线程中运行
-        RetransmitEntry entry;
-        entry.seq = seq;
-        entry.data = std::string(buffer->peek(), buffer->readableBytes());
-        entry.retries = 0;
-
-        sendInLoop(buffer->peek(), buffer->readableBytes());
-
-        pendingRetrans_[seq] = std::move(entry);
-        resetRetransmitTimer(pendingRetrans_[seq]);
-    };
-
-    //确保SendFunc位于io线程中被执行
-    if(loop_->isInThread())
-    {
-        SendFunc();
-    }else {
-        loop_->runInLoop(std::move(SendFunc));
-    }
+    sendWithRetransmit(buffer->peek(),buffer->readableBytes(), seq);
 }
 
 void TcpConnection::ackReceived(uint64_t seq)
