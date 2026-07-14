@@ -13,6 +13,19 @@ index_(Index)
     tcpClient_.setMessageCallback([this] (const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
 }
 
+PooledConnection::~PooledConnection()
+{
+    destroyed_.store(true, std::memory_order_release);
+
+    cancelAllPending();
+
+    // 清除回调，防止 TcpConnection 在 IO 线程回调到已析构的 this
+    tcpClient_.setConnectionCallback(nullptr);
+    tcpClient_.setMessageCallback(nullptr);
+
+    Disconnect();
+}
+
 
 void PooledConnection::removePending(uint64_t seq)
 {
@@ -57,6 +70,9 @@ void PooledConnection::cancelAllPending()
 void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm)
 {
     (void)conn; (void)tm;
+
+    if (destroyed_.load(std::memory_order_acquire))
+        return;
 
     LOG_INFO << "RPCClient: " << index_ <<" received message";
 
@@ -123,6 +139,9 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
 
 void PooledConnection::onConnection(const cmlib::TcpConnectionPtr& conn)
 {
+    if (destroyed_.load(std::memory_order_acquire))
+        return;
+
     if(conn->connected()){
         conn_ = conn;
         setState(ConnState::IDLE);

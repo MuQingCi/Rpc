@@ -35,6 +35,7 @@ class PooledConnection : public std::enable_shared_from_this<PooledConnection>
 {
 public:
     PooledConnection(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t Index);
+    ~PooledConnection();
 
     //成员函数
 
@@ -99,6 +100,7 @@ private:
     cmlib::EventLoop* loop_;
     size_t index_;  //该连接在连接池中的标识
 
+    std::atomic<bool> destroyed_{false};  //析构标志，防止 use-after-free
     std::atomic<ConnState> state_{ConnState::IDLE};     //连接状态
     std::atomic<size_t>activerequests_;    //该连接中的活跃请求
 
