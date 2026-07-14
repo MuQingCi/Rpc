@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <google/protobuf/message.h>
 
-#define RPC_MAGIC_NUMBER 0xC1EA
+#define RPC_MAGIC_NUMBER 0xC1EA 
 
 using namespace clearmoon;
 using namespace clearmoon::net;
@@ -17,7 +17,7 @@ using namespace clearmoon::net;
 struct Header
 {
     uint16_t Magic;
-    uint8_t Flags;  //0请求/1回应/2心跳
+    uint8_t Flags;  //0请求/1回应/2心跳 /3ACK
     uint8_t Version;
     uint32_t TotalLength;
 };
@@ -50,8 +50,9 @@ inline uint32_t getMethodId<CLRPC::EchoRequest>(){ return static_cast<uint32_t>(
 template<>
 inline uint32_t getMethodId<CLRPC::AddRequest>(){ return static_cast<uint32_t>(MethodID::Add);};
 
+
 //编码函数(负责把有关信息和消息数据填入Buffer头部)
-void encode(Buffer* buff, uint8_t flags, uint8_t version, RPC_Meta& meta, google::protobuf::Message& msg);
+void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, const google::protobuf::Message& msg);
 
 //解码函数(负责把有关信息和消息数据从Buffer中提取出来)
 bool decode(Buffer* buff, Header& header, RPC_Meta& meta,std::string& body);

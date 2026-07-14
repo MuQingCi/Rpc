@@ -9,6 +9,7 @@
 #include "net/Buffer.h"
 #include "net/Callbacks.h"
 #include "toolFunc.h"
+#include "TaskThreadPool.h"
 
 #include <cstdint>
 #include <functional>
@@ -50,13 +51,16 @@ private:
     // template<typename Response>
     // Response doResponse(std::string& body);
 
-    std::string handleMessage(std::string msg);
+    std::string handleMessage(const std::string& msg);
 
     TcpServer tcpServer_;
 
     bool started_ = false;
 
     std::map<uint32_t, RpcHandler> handles_;
+
+    //任务线程池
+    std::unique_ptr<TaskThreadPool> taskThreadPool_;
 };
 
 template<typename Request, typename  Response>

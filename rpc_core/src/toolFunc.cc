@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-void encode(Buffer* buff, uint8_t flags, uint8_t version, RPC_Meta& meta, google::protobuf::Message& msg)
+void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, const google::protobuf::Message& msg)
 {
     std::string body;
     if (!msg.SerializeToString(&body)) 
@@ -59,7 +59,7 @@ bool decode(Buffer* buff, Header& header, RPC_Meta& meta,std::string& body)
     header.Version = buff->readUint8();
 
     header.TotalLength = buff->readUint32();
-    if(header.TotalLength < minLength || header.TotalLength > buff->readableBytes()) 
+    if(header.TotalLength < minLength || header.TotalLength > buff->readableBytes() + sizeof(Header)) 
     {
         LOG_WARNING<< "接收到的Buffer数据小于最小长度或接收不完全";
         return false;
