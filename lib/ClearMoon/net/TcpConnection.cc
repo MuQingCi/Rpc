@@ -2,6 +2,7 @@
 #include "Log/Logger.h"
 #include "net/TimerId.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <fcntl.h>
@@ -75,8 +76,8 @@ TcpConnection::TcpConnection(EventLoop* loop, std::string name,
 
 TcpConnection::~TcpConnection()
 {
-    assert(state_ == kDisConnected);
-    if(state_ != kDisConnected)
+    assert(state_.load(std::memory_order_acquire) == kDisConnected);
+    if(state_.load(std::memory_order_acquire) != kDisConnected)
         forceClose();
 
     if(idleTimerId_.valid())
@@ -101,7 +102,7 @@ TcpConnection::~TcpConnection()
 void TcpConnection::connectEstablelished()
 {
     loop_->assertInLoopThread();
-    assert(state_ == kConnecting);
+    assert(state_.load(std::memory_order_acquire) == kConnecting);
 
     channel_.enableReading();
     setState(kConnected);
@@ -117,7 +118,7 @@ void TcpConnection::connectDestroyed()
 {
     loop_->assertInLoopThread();
 
-    if(state_ == kConnected)
+    if(state_.load(std::memory_order_acquire) == kConnected)
     {
         setState(kDisConnected);
     }
@@ -148,7 +149,7 @@ void TcpConnection::connectDestroyed()
 
 void TcpConnection::shutdown()
 {
-    if(state_ == kConnected)
+    if(state_.load(std::memory_order_acquire) == kConnected)
     {
         setState(kDisConnecting);
         auto self = shared_from_this();
@@ -158,7 +159,7 @@ void TcpConnection::shutdown()
 
 void TcpConnection::forceClose()
 {
-    if(state_ == kConnected || state_ == kDisConnecting)
+    if(state_.load(std::memory_order_acquire) == kConnected || state_.load(std::memory_order_acquire) == kDisConnecting)
     {
         setState(kDisConnecting);
         auto self = shared_from_this();
@@ -177,7 +178,7 @@ void TcpConnection::send(const std::string& message)
 }
 void TcpConnection::send(const void* data, size_t len)
 {
-    if(state_ != kConnected) return;
+    if(state_.load(std::memory_order_acquire) != kConnected) return;
 
     if (loop_->isInThread()) {
         sendInLoop(data, len);
@@ -253,7 +254,7 @@ void TcpConnection::ackReceived(uint64_t seq)
 // ========== 文件发送接口 ==========
 void TcpConnection::sendFile(const std::string& filePath)
 {
-    if(state_ != kConnected) return;
+    if(state_.load(std::memory_order_acquire) != kConnected) return;
 
     if(loop_->isInThread())
     {
@@ -270,7 +271,7 @@ void TcpConnection::sendFile(const std::string& filePath)
 void TcpConnection::sendInLoop(const void* data, size_t len)
 {
     loop_->assertInLoopThread();
-    if(state_ == kDisConnected) return;
+    if(state_.load(std::memory_order_acquire) == kDisConnected) return;
 
     ssize_t n = 0;
     if(!channel_.isWriting() && writeBuffer_.readableBytes() == 0)
@@ -303,14 +304,14 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
         }
     }
 
-    if(state_ == kDisConnecting && writeBuffer_.readableBytes() == 0)
+    if(state_.load(std::memory_order_acquire) == kDisConnecting && writeBuffer_.readableBytes() == 0)
         shutdownInLoop();
 }
 
 void TcpConnection::sendFileInLoop(const std::string& filePath)
 {
     loop_->assertInLoopThread();
-    if(state_ == kDisConnected) return;
+    if(state_.load(std::memory_order_acquire) == kDisConnected) return;
 
     // 打开文件
     int fd = ::open(filePath.c_str(), O_RDONLY);
@@ -456,7 +457,7 @@ void TcpConnection::handleWrite()
                 channel_.disableWriting();
             if(writeCompleteCallback_)
                 writeCompleteCallback_(shared_from_this());
-            if(state_ == kDisConnecting)
+            if(state_.load(std::memory_order_acquire) == kDisConnecting)
                 shutdownInLoop();
         }
         else {
@@ -474,10 +475,10 @@ void TcpConnection::handleClose()
     loop_->assertInLoopThread();
     
     // 防重入：如果已经断开，不再重复处理
-    if(state_ == kDisConnected)
+    if(state_.load(std::memory_order_acquire) == kDisConnected)
         return;
     
-    assert(state_ == kConnected || state_ == kDisConnecting);
+    assert(state_.load(std::memory_order_acquire) == kConnected || state_.load(std::memory_order_acquire) == kDisConnecting);
     setState(kDisConnected);
     // channel_.remove() 内部会调用 loop_->removeChannel() 完成 epoll 移除
     // 不需要先调用 disableAll()，避免重复 epoll_ctl DEL 导致的断言失败
@@ -525,13 +526,24 @@ void TcpConnection::shutdownInLoop()
 {
     loop_->assertInLoopThread();
     if(!channel_.isWriting())
+    {
+        // 无待写数据：关闭写端并立即清理连接
+        // handleClose → kDisConnected（避免依赖对端 FIN，EventLoop 退出后不再 poll）
         socket_.shutdownWrite();
+        handleClose();
+    }
+    else
+    {
+        // 有待写数据：先关闭写端，等 sendInLoop 排空 writeBuffer_ 后会再次调用
+        // shutdownInLoop()，届时 isWriting 为 false 进入上面分支完成清理
+        socket_.shutdownWrite();
+    }
 }
 
 void TcpConnection::forceCloseInLoop()
 {
     loop_->assertInLoopThread();
-    if(state_ == kConnected || state_ == kDisConnecting)
+    if(state_.load(std::memory_order_acquire) == kConnected || state_.load(std::memory_order_acquire) == kDisConnecting)
         handleClose();
 }
 

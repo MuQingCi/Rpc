@@ -10,6 +10,7 @@
 #include "net/Buffer.h"
 #include "net/TimerId.h"
 #include "net/Timer.h"
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -45,7 +46,7 @@ public:
     const InetAddress& getLocalAddr() const { return localAddr_; }
     const InetAddress& getPeerAddr() const { return peerAddr_; }
 
-    bool connected() const { return state_ == kConnected; }
+    bool connected() const { return state_.load(std::memory_order_acquire) == kConnected; }
 
     void send(Buffer* buff);
     void send(const std::string& message);
@@ -117,7 +118,7 @@ private:
     //执行清理空闲连接任务
     void onIdleTimeout();
 
-    void setState(StateE s) { state_ = s; }
+    void setState(StateE s) { state_.store(s,std::memory_order_release); }
 
     EventLoop* loop_;
     Channel channel_;
@@ -126,7 +127,7 @@ private:
     InetAddress peerAddr_;
 
     std::string name_;
-    StateE state_{kConnecting};
+    std::atomic<StateE> state_{kConnecting};
 
     //读写Buffer
     Buffer writeBuffer_;

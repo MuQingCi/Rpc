@@ -32,7 +32,10 @@ void TcpClient::disconnect()
 {
     connector_->stop();
     if (connection_)
+    {
         connection_->shutdown();
+        connection_.reset();   // 防止 ~TcpClient() 重复 forceClose()
+    }
 }
 
 void TcpClient::newConnection(Socket socket, InetAddress localAddr)

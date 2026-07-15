@@ -71,6 +71,9 @@ void EventLoop::loop()
         doPendingFuncs();
     }
 
+    //防止loop循环退出后，pending中还有待处理回调
+    doPendingFuncs();
+
     looping_ = false;
 }
 
