@@ -44,15 +44,27 @@ void RPCServer::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp 
 
         if(header.Flags == 0)
         {
+            std::weak_ptr<TcpConnection> weakPtr = conn;
+            EventLoop* ioloop = conn->getLoop();
 
             auto it = handles_.find(meta.method_id);
             if(it == handles_.end())
+            {
                 LOG_ERROR << "Method not found";
-
+                // taskThreadPool_->enqueue(
+                //     [weakPtr,ioloop,tm,meta = std::move(meta)] 
+                //     { 
+                //         ioloop->runInLoop
+                //         ([weakPtr, meta = std::move(meta)]{
+                //         auto conn = weakPtr.lock();
+                //         Buffer sendBuff;
+                //         encode(&sendBuff, 1, 1, meta, const google::protobuf::Message &msg)
+                //         conn->send();
+                //         });
+                //     });
+                continue;
+            }
             auto handler = it->second;
-
-            std::weak_ptr<TcpConnection> weakPtr = conn;
-            EventLoop* ioloop = conn->getLoop();
 
             taskThreadPool_->enqueue([weakPtr,ioloop,tm,handler,meta = std::move(meta),body = std::move(body)]
             {

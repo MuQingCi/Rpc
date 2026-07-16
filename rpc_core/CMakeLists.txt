@@ -3,6 +3,7 @@
 add_library(rpc_core STATIC
     src/message.pb.cc
     src/toolFunc.cc
+    src/TaskThreadPool.cc
 )
 
 # 设置公开包含路径，供外部目标使用

@@ -43,24 +43,31 @@ void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, 
 
 bool decode(Buffer* buff, Header& header, RPC_Meta& meta,std::string& body)
 {
+    DecodeError err = DecodeError::NoError;
+
     const uint32_t minLength = static_cast<uint32_t>(sizeof(Header) + sizeof(RPC_Meta));
-    if(buff->readableBytes() < minLength) return false;
-    
+    if(buff->readableBytes() < minLength) 
+    {
+        buff->readAllAsString();
+        return false;
+    }
     //读取头部 按Header-Meta-body的顺序依次读出
     //Header
     header.Magic = buff->readUint16();
     if(header.Magic != RPC_MAGIC_NUMBER) 
     {
-        LOG_WARNING <<"接收到一个非法数据包(魔数检验错误)!"; 
-        return false;
+        LOG_WARNING <<"接收到一个非法数据包(魔数检验错误) !";
+        err = DecodeError::MagicError;
     }
 
     header.Flags = buff->readUint8();
     header.Version = buff->readUint8();
 
     header.TotalLength = buff->readUint32();
+
     if(header.TotalLength < minLength || header.TotalLength > buff->readableBytes() + sizeof(Header)) 
     {
+        err = DecodeError::LengthError;
         LOG_WARNING<< "接收到的Buffer数据小于最小长度或接收不完全";
         return false;
     }

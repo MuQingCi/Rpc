@@ -44,6 +44,13 @@ enum MethodID : uint32_t
 template<typename Resquest>
 uint32_t getMethodId();
 
+enum struct DecodeError{
+    MagicError,
+    VersionError,
+    LengthError,
+    NoError,
+};
+
 template<>
 inline uint32_t getMethodId<CLRPC::EchoRequest>(){ return static_cast<uint32_t>(MethodID::Echo);};
 
