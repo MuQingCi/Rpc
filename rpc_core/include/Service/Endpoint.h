@@ -16,6 +16,7 @@ struct Endpoint
     
     std::string address() const { return host + ":" + std::to_string(port); }
 
+    //运算符重载
     bool operator ==(const Endpoint& other) const
     {
         return service == other.service && host == other.host && port == other.port && weight == other.weight && metadata == other.metadata;

@@ -9,7 +9,7 @@
 class isServiceDiscovery
 {
 public:
-using EndpointListCallback = std::function<void(std::vector<Endpoint>&)>;
+using EndpointListCallback = std::function<void(const std::vector<Endpoint>&)>;
 
     virtual ~isServiceDiscovery() = default;
 
