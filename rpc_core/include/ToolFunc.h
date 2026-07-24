@@ -9,8 +9,7 @@
 
 #define RPC_MAGIC_NUMBER 0xC1EA 
 
-using namespace clearmoon;
-using namespace clearmoon::net;
+namespace cmlib = clearmoon::net;
 
 //8Bytes
 #pragma pack(push,1)
@@ -59,10 +58,10 @@ inline uint32_t getMethodId<CLRPC::AddRequest>(){ return static_cast<uint32_t>(M
 
 
 //编码函数(负责把有关信息和消息数据填入Buffer头部)
-void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, const google::protobuf::Message& msg);
+void encode(cmlib::Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, const google::protobuf::Message& msg);
 
 //解码函数(负责把有关信息和消息数据从Buffer中提取出来)
-bool decode(Buffer* buff, Header& header, RPC_Meta& meta,std::string& body);
+bool decode(cmlib::Buffer* buff, Header& header, RPC_Meta& meta,std::string& body);
 
 
 #endif
