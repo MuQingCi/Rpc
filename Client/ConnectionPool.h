@@ -2,6 +2,7 @@
 #define CLEARMOON_RPC_CONNECTIONPOOL_h
 
 #include "PooledConnection.h"
+#include "Service/Endpoint.h"
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
 #include "net/TimerId.h"
@@ -9,8 +10,10 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace cmlib = clearmoon::net;
@@ -26,7 +29,19 @@ enum class LoadBalanceStrategy
 class ConnectionPool
 {
 public:
+using ConnPtr = std::shared_ptr<PooledConnection>; 
+using ServerKey = std::string;
+
+    //无服务分发版
     ConnectionPool(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t poolSize, LoadBalanceStrategy strategy = LoadBalanceStrategy::RoundRobin);
+
+    //服务分发版
+    ConnectionPool(cmlib::EventLoop* loop, 
+                   const cmlib::InetAddress& serverAddr, 
+                   size_t poolSize, 
+                   LoadBalanceStrategy strategy,
+                   size_t connPerServer
+                );
 
     ~ConnectionPool();
 
@@ -68,18 +83,34 @@ public:
 
     //获取一条可用的连接(Borrowed类)
     Borrowed acquire();
+    //带服务发现版
+    Borrowed acquire(const ServerKey& key);
 
     size_t size() const { return connections_.size(); }
 
+    void updateEndpoints(const std::vector<Endpoint>& epVec);
+
 private:
+
+    struct ServerConnGroup{
+        Endpoint endpoint;
+        std::vector<ConnPtr> connections;
+    };
+    //返回 host:port
+    std::string makeServerKey(const Endpoint& ep);
+
     //负载均衡策略对应函数
     Borrowed acquireRoundRobin();
     Borrowed acquireLeastConnection();
     Borrowed acquireRandom();
 
-    void doHealthCheck();
+    //服务发现版
+    Borrowed acquireRoundRobin(const ServerKey& key);
+    Borrowed acquireLeastConnection(const ServerKey& key);
+    Borrowed acquireRandom(const ServerKey& key);
 
-    using ConnPtr = std::shared_ptr<PooledConnection>; 
+
+    void doHealthCheck();
 
     //网络相关
     cmlib::EventLoop* loop_;
@@ -91,6 +122,13 @@ private:
 
     std::vector<ConnPtr> connections_;
     std::atomic<size_t> rrIndex_{0};
+
+    //服务发现相关
+    std::map<ServerKey, ServerConnGroup> servers_;
+    std::vector<Endpoint> currentEndpoints_;
+
+    size_t connPerServer_;
+    std::map<ServerKey, std::atomic<size_t>> roundRobinIdex_;
 
     //健康检查相关
     cmlib::TimerId healthCheckTimerId_;
