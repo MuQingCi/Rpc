@@ -11,7 +11,7 @@
 
 namespace cmlib = clearmoon::net;
 
-#include "rpc_exceptions.h"
+#include "Rpc_exceptions.h"
 
 
 template<typename Response>

@@ -38,7 +38,7 @@ void PooledConnection::removePending(uint64_t seq)
     if(ctx.timerId.valid())
     {
         loop_->cancel(ctx.timerId);
-        ctx.timerId = TimerId{};
+        ctx.timerId = cmlib::TimerId{};
     }
 
     it->second.cancel();
@@ -109,7 +109,7 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
                     if(it->second.timerId.valid())
                     {
                         loop_->cancel(it->second.timerId);
-                        it->second.timerId = TimerId{};
+                        it->second.timerId = cmlib::TimerId{};
                     }
 
                     callback = std::move(it->second.onResponse);

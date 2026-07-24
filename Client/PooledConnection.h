@@ -4,7 +4,7 @@
 #include "net/Buffer.h"
 #include "net/Callbacks.h"
 #include "net/TcpClient.h"
-#include "toolFunc.h"
+#include "ToolFunc.h"
 
 #include <atomic>
 #include <chrono>
@@ -36,8 +36,6 @@ class PooledConnection : public std::enable_shared_from_this<PooledConnection>
 public:
     PooledConnection(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t Index);
     ~PooledConnection();
-
-    //成员函数
 
     //连接
     void Connect() { tcpClient_.connect(); }
@@ -140,7 +138,7 @@ void PooledConnection::sendRequest(const Request& request,
     meta.err_code = 0;
 
     //3.编码为Buffer
-    Buffer sendBuff;
+    cmlib::Buffer sendBuff;
     encode(&sendBuff, 0, 1, meta, request);
 
     //4.在pendings_中注册
