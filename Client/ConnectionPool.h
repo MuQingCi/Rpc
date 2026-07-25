@@ -30,7 +30,7 @@ class ConnectionPool
 {
 public:
 using ConnPtr = std::shared_ptr<PooledConnection>; 
-using ServerKey = std::string;
+using ServerName = std::string;
 
     //无服务分发版
     ConnectionPool(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t poolSize, LoadBalanceStrategy strategy = LoadBalanceStrategy::RoundRobin);
@@ -81,21 +81,33 @@ using ServerKey = std::string;
     void startHealthCheck();
     void stopHealthCheck();
 
-    //获取一条可用的连接(Borrowed类)
+    //取静态池连接
     Borrowed acquire();
-    //带服务发现版
-    Borrowed acquire(const ServerKey& key);
+    //根据服务名获取动态池连接
+    Borrowed acquire(const ServerName& key);
 
     size_t size() const { return connections_.size(); }
 
     void updateEndpoints(const std::vector<Endpoint>& epVec);
 
 private:
-
+    //服务组(一个组包含一个端点及端点上的连接)
     struct ServerConnGroup{
-        Endpoint endpoint;
-        std::vector<ConnPtr> connections;
+        Endpoint endpoint;  //服务端点
+        std::vector<ConnPtr> connections;   //端点对应的连接池
+        std::unique_ptr<std::atomic<size_t>> connRrIndex;   //组内连接轮询索引
+
+        ServerConnGroup():connRrIndex(std::make_unique<std::atomic<size_t>>(0)){}
     };
+    //一个服务，一个服务Entry
+    struct ServiceEntry{
+        std::vector<ServerConnGroup> groups;    //服务组(可以有一组/一个端点)
+        //端点级轮询索引
+        std::unique_ptr<std::atomic<size_t>> endpointRrIndex;
+
+        ServiceEntry() : endpointRrIndex(std::make_unique<std::atomic<size_t>>(0)){}
+    };
+
     //返回 host:port
     std::string makeServerKey(const Endpoint& ep);
 
@@ -105,13 +117,11 @@ private:
     Borrowed acquireRandom();
 
     //服务发现版
-    Borrowed acquireRoundRobin(const ServerKey& key);
-    Borrowed acquireLeastConnection(const ServerKey& key);
-    Borrowed acquireRandom(const ServerKey& key);
-
+    Borrowed acquireRoundRobin(ServerConnGroup& group);
+    Borrowed acquireLeastConnection(ServerConnGroup& group);
+    Borrowed acquireRandom(ServerConnGroup& group);
 
     void doHealthCheck();
-
     //网络相关
     cmlib::EventLoop* loop_;
     cmlib::InetAddress serverAddr_;
@@ -120,15 +130,14 @@ private:
     size_t connNum_;
     LoadBalanceStrategy strategy_;
 
+    //静态单地址池
     std::vector<ConnPtr> connections_;
     std::atomic<size_t> rrIndex_{0};
 
-    //服务发现相关
-    std::map<ServerKey, ServerConnGroup> servers_;
+    //动态多服务池
+    std::map<ServerName, ServiceEntry> servers_;
     std::vector<Endpoint> currentEndpoints_;
-
     size_t connPerServer_;
-    std::map<ServerKey, std::atomic<size_t>> roundRobinIdex_;
 
     //健康检查相关
     cmlib::TimerId healthCheckTimerId_;
