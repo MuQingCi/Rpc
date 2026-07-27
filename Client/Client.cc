@@ -3,6 +3,7 @@
 #include "Service/Endpoint.h"
 
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -31,22 +32,34 @@ RPCClient::RPCClient(cmlib::EventLoop* loop,
 void RPCClient::subscribe(const std::string& serviceName)
 {
   	if(!dynamic_ || !discovery_) return;
-  	if(subscribedServices_.count(serviceName)) return;
 
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		if(subscribedServices_.count(serviceName)) return;
+		subscribedServices_.insert(serviceName);
+	}
+	
   	auto self = shared_from_this();
-  	discovery_->subscribe(serviceName, [self](const std::vector<Endpoint>& epVec){
-    self->connPool_->updateEndpoints(epVec);
+	std::weak_ptr<RPCClient> weakSelf = self;
+  	discovery_->subscribe(serviceName, [weakSelf,serviceName](const std::vector<Endpoint>& epVec){
+		auto self = weakSelf.lock();
+		if(self)
+    		self->connPool_->updateServiceEndpoints(serviceName,epVec);
   	});
-  	subscribedServices_.insert(serviceName);
 }
 
 void RPCClient::unsubscribe(const std::string& serviceName)
 {
 	if(!dynamic_ || !discovery_) return;
-	if(!subscribedServices_.count(serviceName)) return;
+
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		if(!subscribedServices_.count(serviceName)) return;
+		subscribedServices_.erase(serviceName);
+	}
 
 	discovery_->unsubscribe(serviceName);
-	subscribedServices_.erase(serviceName);
+	connPool_->ignoreService(serviceName);
 	connPool_->removeService(serviceName);
 }
 

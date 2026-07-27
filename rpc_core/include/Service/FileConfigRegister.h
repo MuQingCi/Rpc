@@ -47,6 +47,8 @@ public:
 
     virtual void subscribe(const std::string& serviceName, EndpointListCallback callback) override;
     virtual void unsubscribe(const std::string& serviceName) override;
+
+    virtual void shutdown() override;
 private:
     //扫描整个配置目录
     void loadAllEndPoints();

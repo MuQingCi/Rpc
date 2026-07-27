@@ -1,9 +1,10 @@
-#include "Client/client.h"
+#include "Client/Client.h"
+#include "Service/FileConfigRegister.h"
 #include "net/EventLoop.h"
 #include "net/EventLoopThread.h"
 #include "net/InetAddress.h"
 #include "net/Log/Logger.h"
-#include "message.pb.h"
+#include "Message.pb.h"
 
 #include <chrono>
 #include <iostream>
@@ -14,7 +15,7 @@ using namespace clearmoon;
 using namespace clearmoon::net;
 
 /// @brief 测试 Echo 函数（method_id = 0），返回 1=通过, 0=失败
-Task<int> testEcho(RPCClient& client)
+Task<int> testEcho(std::shared_ptr<RPCClient> client)
 {
     CLRPC::EchoRequest req;
     req.set_msg("Hello from async client!");
@@ -23,7 +24,7 @@ Task<int> testEcho(RPCClient& client)
     uint32_t method_id = static_cast<uint32_t>(MethodID::Echo);
 
     CLRPC::EchoResponse res =
-        co_await client.CallAsync<CLRPC::EchoRequest, CLRPC::EchoResponse>(
+        co_await client->CallAsync<CLRPC::EchoRequest, CLRPC::EchoResponse>("EchoService",
             req, timeout, method_id);
 
     std::cout << "[Echo Test] reply: " << res.reply()
@@ -42,7 +43,7 @@ Task<int> testEcho(RPCClient& client)
 }
 
 /// @brief 测试 Add 函数（method_id = 1），返回 1=通过, 0=失败
-Task<int> testAdd(RPCClient& client)
+Task<int> testAdd(std::shared_ptr<RPCClient> client)
 {
     CLRPC::AddRequest req;
     req.set_a(100);
@@ -52,7 +53,7 @@ Task<int> testAdd(RPCClient& client)
     uint32_t method_id = static_cast<uint32_t>(MethodID::Add);
 
     CLRPC::AddResponse res =
-        co_await client.CallAsync<CLRPC::AddRequest, CLRPC::AddResponse>(
+        co_await client->CallAsync<CLRPC::AddRequest, CLRPC::AddResponse>("AddService",
             req, timeout, method_id);
 
     std::cout << "[Add Test] result: " << res.result()
@@ -71,7 +72,7 @@ Task<int> testAdd(RPCClient& client)
 }
 
 /// @brief 汇集所有测试，返回通过的测试数
-Task<int> runAllTests(RPCClient& client)
+Task<int> runAllTests(std::shared_ptr<RPCClient> client)
 {
     int passed = 0;
 
@@ -92,12 +93,16 @@ int main()
     EventLoopThread loopThread;
     EventLoop* loop = loopThread.start();
 
-    InetAddress serverAddr("127.0.0.1", 1234, false);
+    // InetAddress serverAddr("127.0.0.1", 1234, false);
+    auto discovery = std::make_shared<FileConfigRegister>(loop,
+    "./config",1.0,RegistryMode::Client);
 
     int ret = 0;
     {
-        RPCClient rpcClient(loop, serverAddr);
+        auto rpcClient = std::make_shared<RPCClient>(loop, 4,discovery);
 
+        rpcClient->subscribe("EchoService");
+        rpcClient->subscribe("AddService");
         // 等待连接池建立 TCP 连接
         std::this_thread::sleep_for(std::chrono::seconds(1));
 

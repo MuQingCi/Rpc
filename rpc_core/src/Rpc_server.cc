@@ -1,18 +1,13 @@
 #include "../include/Rpc_server.h"
 #include "Service/Endpoint.h"
 #include "TaskThreadPool.h"
-#include "message.pb.h"
+#include "Message.pb.h"
 #include "net/Buffer.h"
 #include "net/EventLoop.h"
 #include "net/Log/Logger.h"
 #include "net/TcpServer.h"
 #include "net/TcpConnection.h"
 
-// Protobuf 消息定义
-#include "message.pb.h"
-
-//工具函数
-#include "ToolFunc.h"
 
 #include <arpa/inet.h>
 #include <cassert>
@@ -145,8 +140,11 @@ void RPCServer::start()
     std::unique_lock<std::mutex> lock(mutex_);
     if(started_) return;
 
-    if(registry_ && !serviceNames_.empty())
+    if(registry_)
     {
+        if(serviceNames_.empty())
+            LOG_WARNING<<"No service names configured in starting";
+
         Endpoint ep;
         ep.host = getLocalIp();
         ep.port = listenAddr_.toPort();
@@ -190,6 +188,7 @@ void RPCServer::stop()
             LOG_INFO << "Service " << svc << " deregistered at " << ep.host << ":" << ep.port;
         }
     }
+    registry_->shutdown();
 }
 
 void RPCServer::addService(const std::string& serviceName)
@@ -225,30 +224,32 @@ std::string RPCServer::getLocalIp() const
 
     if (env && env[0] != '\0') 
     {
-    return env;   // 环境变量有效，直接返回
+        return env;   // 环境变量有效，直接返回
     }
 
-    struct ifaddrs* ifAddrStruct = nullptr;
-    if(getifaddrs(&ifAddrStruct) == 0)
-    {
-        for(struct ifaddrs* ifa = ifAddrStruct; ifa != nullptr; ifa = ifa->ifa_next)
-        {
-            //如果地址为空或者不为Ipv4则跳过
-            if(!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
-                continue;
-            auto* addr_in = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
-            //排除环回地址
-            if(addr_in->sin_addr.s_addr == htonl(INADDR_LOOPBACK))
-                continue;
+    //获取网卡IP等非环回地址
+    //-----基于测试才将其注释掉
+    // struct ifaddrs* ifAddrStruct = nullptr;
+    // if(getifaddrs(&ifAddrStruct) == 0)
+    // {
+    //     for(struct ifaddrs* ifa = ifAddrStruct; ifa != nullptr; ifa = ifa->ifa_next)
+    //     {
+    //         //如果地址为空或者不为Ipv4则跳过
+    //         if(!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+    //             continue;
+    //         auto* addr_in = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
+    //         //排除环回地址
+    //         if(addr_in->sin_addr.s_addr == htonl(INADDR_LOOPBACK))
+    //             continue;
 
-             char ip[INET_ADDRSTRLEN];
-             inet_ntop(AF_INET, &addr_in->sin_addr, ip, sizeof(ip));
-             freeifaddrs(ifAddrStruct);
+    //          char ip[INET_ADDRSTRLEN];
+    //          inet_ntop(AF_INET, &addr_in->sin_addr, ip, sizeof(ip));
+    //          freeifaddrs(ifAddrStruct);
 
-             return std::string(ip);
-        }
-        freeifaddrs(ifAddrStruct);
-    }
+    //          return std::string(ip);
+    //     }
+    //     freeifaddrs(ifAddrStruct);
+    // }
 
     LOG_WARNING<<"GetLocalIp return ip is 127.0.0.1";
     return "127.0.0.1";

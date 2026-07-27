@@ -5,6 +5,7 @@
 #include "net/InetAddress.h"
 #include "net/Log/Logger.h"
 
+#include <algorithm>
 #include <limits>
 #include <mutex>
 #include <random>
@@ -43,20 +44,53 @@ ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
 ConnectionPool::~ConnectionPool()
 {
     stopHealthCheck();
-    for(auto& ky : connections_)
-    {
-        ky->cancelAllPending();
-        ky->Disconnect();
-    }
 
-     // 关闭动态池所有连接
-    for (auto& [svc, entry] : servers_) {
-        for (auto& group : entry.groups) {
-            for (auto& conn : group.connections) {
-                conn->Disconnect();
+    
+    auto addToPending = [&](ConnPtr conn) 
+    {
+        // 避免重复设置回调（如果已经设置过，这里覆盖掉旧的也不会有问题，但最好只设置一次）
+        conn->setOnDisconnected([this, conn] 
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            auto it = std::find(pendingClose_.begin(), pendingClose_.end(), conn);
+            if (it != pendingClose_.end()) {
+                pendingClose_.erase(it);
             }
+            if (pendingClose_.empty()) {
+                closeCv_.notify_all();
+            }
+        });
+        pendingClose_.push_back(conn);
+        conn->Disconnect();
+    };
+
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        for(auto& ky : connections_)
+        {
+            ky->cancelAllPending();
+            // ky->Disconnect();
+            addToPending(ky);
         }
+
+        connections_.clear();
+
+        // 关闭动态池所有连接
+        for (auto& [svc, entry] : servers_) {
+            for (auto& group : entry.groups) 
+            {
+                for (auto& conn : group.connections) 
+                    // conn->Disconnect();
+                    addToPending(conn);
+            }
     }
+    servers_.clear();
+    }
+    
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    closeCv_.wait(lock,[this]{return pendingClose_.empty();});
 }
 
 void ConnectionPool::startHealthCheck()
@@ -134,7 +168,16 @@ void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
                 for(auto& conn : g.connections)
                 {
                     LOG_INFO<<"Disconnect a Connection from "<<g.endpoint.host<<":" << g.endpoint.port;
-                    conn->Disconnect();
+                    //-----------------
+                    conn->setOnDisconnected([this,conn]{
+                        std::unique_lock<std::mutex> lock(mutex_);
+                        auto it = std::find(pendingClose_.begin(),pendingClose_.end(), conn);
+                        if(it != pendingClose_.end()) pendingClose_.erase(it);
+                        if(pendingClose_.empty()) closeCv_.notify_all();
+                    });
+                    pendingClose_.push_back(conn);
+                    //-----------------------
+                    conn->Disconnect(); //异步关闭
                 }
                     
             it = servers_.erase(it);
@@ -144,6 +187,7 @@ void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
     //3.增量更新每个服务
     for(auto& [svcn,newEps] : svcMap)
     {
+        if(ignoreServices_.count(svcn)) continue;
         auto it = servers_.find(svcn);
         //新服务
         if(it == servers_.end())
@@ -199,7 +243,17 @@ void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
                 {
                     //移除则断开连接
                     for(auto& conn : groups[i].connections)
+                    {
+                        conn->setOnDisconnected([this,conn]{
+                            std::unique_lock<std::mutex> lock(mutex_);
+                            auto it = std::find(pendingClose_.begin(),pendingClose_.end(),conn);
+                            if(it!=pendingClose_.end()) pendingClose_.erase(it);
+                            if(pendingClose_.empty()) closeCv_.notify_all();
+                        });
+                        pendingClose_.push_back(conn);
                         conn->Disconnect();
+                    }
+                        
                     groups.erase(groups.begin() + i);
                 }else {
                     ++i;
@@ -233,6 +287,93 @@ void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
         startHealthCheck();
 }
 
+void ConnectionPool::updateServiceEndpoints(const std::string& serviceName, const std::vector<Endpoint>& epVec) {
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    auto it = servers_.find(serviceName);
+    if (epVec.empty()) {
+        // 如果端点列表为空，移除整个服务
+        if (it != servers_.end()) {
+            for (auto& group : it->second.groups) {
+                for (auto& conn : group.connections) {
+                    conn->setOnDisconnected([this, conn] {
+                        std::unique_lock<std::mutex> lock(mutex_);
+                        auto it = std::find(pendingClose_.begin(), pendingClose_.end(), conn);
+                        if (it != pendingClose_.end()) pendingClose_.erase(it);
+                        if (pendingClose_.empty()) closeCv_.notify_all();
+                    });
+                    pendingClose_.push_back(conn);
+                    conn->Disconnect();
+                }
+            }
+            servers_.erase(it);
+        }
+        return;
+    }
+
+    // 构造新端点 key 集合
+    std::set<std::string> newKeys;
+    for (auto& ep : epVec) newKeys.insert(makeServerKey(ep));
+
+    if (it == servers_.end()) {
+        // 新服务：创建 ServiceEntry
+        ServiceEntry entry;
+        for (auto& ep : epVec) {
+            ServerConnGroup group;
+            group.endpoint = ep;
+            for (size_t i = 0; i < connPerServer_; ++i) {
+                auto conn = std::make_shared<PooledConnection>(loop_, cmlib::InetAddress(ep.host, ep.port, false), i);
+                conn->Connect();
+                group.connections.push_back(std::move(conn));
+            }
+            entry.groups.push_back(std::move(group));
+        }
+        servers_[serviceName] = std::move(entry);
+    } else {
+        // 已有服务：增量更新端点
+        auto& entry = it->second;
+
+        // 移除旧端点
+        auto& groups = entry.groups;
+        for (size_t i = 0; i < groups.size(); ) {
+            auto key = makeServerKey(groups[i].endpoint);
+            if (newKeys.find(key) == newKeys.end()) {
+                for (auto& conn : groups[i].connections) {
+                    conn->setOnDisconnected([this, conn] {
+                        std::unique_lock<std::mutex> lock(mutex_);
+                        auto it = std::find(pendingClose_.begin(), pendingClose_.end(), conn);
+                        if (it != pendingClose_.end()) pendingClose_.erase(it);
+                        if (pendingClose_.empty()) closeCv_.notify_all();
+                    });
+                    pendingClose_.push_back(conn);
+                    conn->Disconnect();
+                }
+                groups.erase(groups.begin() + i);
+            } else {
+                ++i;
+            }
+        }
+
+        // 添加新端点
+        for (auto& ep : epVec) {
+            auto key = makeServerKey(ep);
+            bool exists = std::any_of(groups.begin(), groups.end(), [&](const ServerConnGroup& g) {
+                return makeServerKey(g.endpoint) == key;
+            });
+            if (!exists) {
+                ServerConnGroup group;
+                group.endpoint = ep;
+                for (size_t i = 0; i < connPerServer_; ++i) {
+                    auto conn = std::make_shared<PooledConnection>(loop_, cmlib::InetAddress(ep.host, ep.port, false), i);
+                    conn->Connect();
+                    group.connections.push_back(std::move(conn));
+                }
+                groups.push_back(std::move(group));
+            }
+        }
+    }
+}
+
 void ConnectionPool::removeService(const std::string serviceName)
 {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -242,9 +383,28 @@ void ConnectionPool::removeService(const std::string serviceName)
     {
         for(auto& g : it->second.groups)
             for(auto&conn : g.connections)
+            {
+                conn->setOnDisconnected([this, conn] {
+                    std::unique_lock<std::mutex> lock(mutex_);
+                    auto it = std::find(pendingClose_.begin(), pendingClose_.end(), conn);
+                    if (it != pendingClose_.end()) {
+                        pendingClose_.erase(it);
+                    }
+                    if (pendingClose_.empty()) {
+                        closeCv_.notify_all();
+                    }
+                });
+                pendingClose_.push_back(conn);
                 conn->Disconnect();
+            }
         servers_.erase(it);
     }
+}
+
+void ConnectionPool::ignoreService(const std::string& serviceName)
+{
+	std::unique_lock<std::mutex> lock(mutex_);
+	ignoreServices_.insert(serviceName);
 }
 
 

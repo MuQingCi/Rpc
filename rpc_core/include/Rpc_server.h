@@ -11,6 +11,9 @@
 #include "net/Callbacks.h"
 #include "TaskThreadPool.h"
 
+//工具函数
+#include "ToolFunc.h"
+
 #include <cstdint>
 #include <functional>
 #include <google/protobuf/message.h>
@@ -34,8 +37,9 @@ using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(cons
     RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr);
 
     //含配置注册的构造函数--单服务
-    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry, const std::string& serviceName = std::string());
+    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry, const std::string& serviceName);
 
+    //含配置注册的构造函数
     RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry);
 
     ~RPCServer();

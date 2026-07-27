@@ -12,10 +12,10 @@ class Registry
 public: 
     virtual ~Registry() = default;
 
-    virtual void registerService(const std::string& serviceName, const EndPoint& endpoint) = 0;
-    virtual void deregisterService(const std::string& serviceName, const EndPoint& endpoint) = 0;
+    virtual void registerService(const std::string& serviceName, const Endpoint& endpoint) = 0;
+    virtual void deregisterService(const std::string& serviceName, const Endpoint& endpoint) = 0;
 
-    virtual void subscribe(const std::string& serviceName, std::function<void(std::vector<EndPoint>)> callback) = 0;
+    virtual void subscribe(const std::string& serviceName, std::function<void(std::vector<Endpoint>)> callback) = 0;
     virtual void unsubscribe(const std::string& serviceName) = 0;
 };
 

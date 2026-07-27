@@ -1,7 +1,7 @@
 #ifndef CLEARMOON_TOOLFUNC_H
 #define CLEARMOON_TOOLFUNC_H
 
-#include "message.pb.h"
+#include "Message.pb.h"
 #include "net/Buffer.h"
 
 #include <cstdint>

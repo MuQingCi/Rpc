@@ -48,17 +48,6 @@ FileConfigRegister::FileConfigRegister(cmlib::EventLoop* loop,
 
 FileConfigRegister::~FileConfigRegister()
 {
-    // 取消定时器需要在 IO 线程完成，但对象可能正在析构。
-    // 使用 shared_from_this 延长生命周期，并投递到 IO 线程执行
-    auto self = shared_from_this();
-
-    loop_->runInLoop([self] {
-        std::lock_guard<std::mutex> lock(self->mutex_);
-        if (self->pollerTimerId_.valid()) {
-            self->loop_->cancel(self->pollerTimerId_);
-            self->pollerTimerId_ = cmlib::TimerId{};
-        }
-    });
 }
 
 void FileConfigRegister::registerService(const std::string& serviceName, const Endpoint& endpoint)
@@ -125,6 +114,18 @@ void FileConfigRegister::unsubscribe(const std::string& serviceName)
     //真正的清理将在下一次 loadAllEndPoints 或 subscribe 中进行
     std::lock_guard<std::mutex> lock(mutex_);
     pendingUnsubscribe_.insert(serviceName);
+}
+
+void FileConfigRegister::shutdown()
+{
+    auto self = shared_from_this();
+    loop_->runInLoop([self] {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        if (self->pollerTimerId_.valid()) {
+            self->loop_->cancel(self->pollerTimerId_);
+            self->pollerTimerId_ = cmlib::TimerId{};
+        }
+    });
 }
 
 void FileConfigRegister::loadAllEndPoints()
@@ -221,6 +222,8 @@ void FileConfigRegister::loadAllEndPoints()
         }
     }
 }
+
+
 
 /**
  * @brief 解析单个yaml文件,被loadAllEndPoints函数引用

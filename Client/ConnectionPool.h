@@ -8,11 +8,13 @@
 #include "net/TimerId.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -87,7 +89,12 @@ using ServerName = std::string;
     size_t size() const { return connections_.size(); }
 
     void updateEndpoints(const std::vector<Endpoint>& epVec);
+
+    // 增量更新单个服务端点，不影响其他服务
+    void updateServiceEndpoints(const std::string& serviceName, const std::vector<Endpoint>& epVec);
+
     void removeService(const std::string serviceName);
+    void ignoreService(const std::string& serviceName);
 
 private:
     //服务组(一个组包含一个端点及端点上的连接)
@@ -137,11 +144,14 @@ private:
     std::map<ServerName, ServiceEntry> servers_;
     std::vector<Endpoint> currentEndpoints_;
     size_t connPerServer_;
+    std::set<std::string> ignoreServices_;
 
+    std::vector<ConnPtr> pendingClose_;
     //健康检查相关
     cmlib::TimerId healthCheckTimerId_;
     std::chrono::seconds healthCheckInterval_{5};
     
     mutable std::mutex mutex_;
+    std::condition_variable closeCv_;
 };
 #endif

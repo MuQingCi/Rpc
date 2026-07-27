@@ -5,7 +5,7 @@
 #include "Service/IsServiceDiscovery.h"
 #include "Service/ServiceDiscoverer.h"
 #include "Task.h"
-#include "message.pb.h"
+#include "Message.pb.h"
 
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 
@@ -45,46 +46,26 @@ public:
 
     ~RPCClient()
     {
-        // reconnectEnabled_ = false;
+        if(dynamic_ && discovery_)
+        {
+            decltype(subscribedServices_) copy;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                copy.swap(subscribedServices_);
+            }
 
-        // if(reconnectTimerId_.valid())
-        // {
-        //     loop_->cancel(reconnectTimerId_);
-        //     reconnectTimerId_ = TimerId{};
-        // }
-
-        // cancelAllPending();
-        // tcpClient_.disconnect();
+            for(const auto& svc : copy)
+            {
+                discovery_->unsubscribe(svc);
+                connPool_->removeService(svc);
+            }   
+        }
+        discovery_->shutdown();
+        connPool_->stopHealthCheck();
     }
 
     void subscribe(const std::string& serviceName);
     void unsubscribe(const std::string& serviceName);
-
-    // ========== 连接 / 断开 ==========
-    // void start();
-    // void stop();
-    // bool connected() const { return conn_ && conn_->connected(); }
-
-    // ========== 回调设置 ==========
-    // using ConnectionStateCallback = std::function<void(bool connected)>;
-    // void setConnectionStateCallback(ConnectionStateCallback cb)
-    // { connectionStateCallback_ = std::move(cb); }
-
-    // // ========== 重连策略配置 ==========
-    // void setReconnectConfig(const ReconnectConfig& config);
-    // void enableReconnect(bool on) { reconnectEnabled_ = on; }
-    // bool isReconnectEnabled() const { return reconnectEnabled_; }
-    // void resetRetryCount() { retryCount_ = 0; }
-
-    // ========== 消息回调 ==========
-    // void onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm);
-
-    // // ========== 连接回调 ==========
-    // void onConnection(const TcpConnectionPtr& conn);
-
-    // // ========== 同步调用（无超时） ==========
-    // template<typename Request, typename Response>
-    // Response Call(Request& req);
 
     //异步调用 --c++20的协程版本
     template<typename Request, typename Response>
@@ -96,47 +77,7 @@ public:
                              Request& req, 
                              std::chrono::milliseconds timeout, 
                              uint32_t method_id);
-
-    // // ========== 同步调用（带超时） ==========
-    // template<typename Request, typename Response>
-    // Response Call(Request& req, std::chrono::milliseconds timeout);
-
 private:
-    // // ========== 内部数据结构 ==========
-    // /// 单个待处理请求的上下文
-    // struct PendingContext
-    // {
-    //     std::function<void(const std::string&)> callback;
-    //     TimerId timerId;
-    //     uint64_t seq;
-    //     bool     completed = false;
-    // };
-
-    // // ========== 内部函数 ==========
-    // //注册模板函数
-    // template<typename Response>
-    // uint64_t registerPending(std::promise<Response>&& prom, std::chrono::milliseconds timeout);
-
-    // //通用注册函数
-    // uint64_t registerPendingRaw(std::function<void(const std::string&)> callback,
-    //                             std::chrono::milliseconds timeout);
-
-    // void onTimeout(uint64_t seq);
-    // void removePending(uint64_t seq);
-    // void cancelAllPending();
-
-    // // ========== 重连逻辑 ==========
-    // void scheduleReconnect();
-    // void doReconnect();
-
-    // // ========== 连接状态通知 ==========
-    // void notifyConnectionState(bool isConnected);
-
-    // ========== 成员变量 ==========
-
-    // --- 底层网络 ---
-    // TcpClient       tcpClient_;
-    // TcpConnectionPtr conn_;
     cmlib::EventLoop*       loop_;            // 缓存 EventLoop 指针
 
     //连接池
@@ -146,24 +87,8 @@ private:
     std::shared_ptr<isServiceDiscovery> discovery_;
     std::set<std::string> subscribedServices_;
     bool dynamic_;
-    // // --- RPC 请求序列号 ---
-    // uint64_t nextSeq_{1};
 
-    // // pending_ 中的回调不应持有锁；移除回调到临界区之外执行
-    // std::map<uint64_t, PendingContext> pending_;
-    // mutable std::mutex                 mutex_;
-
-    // // --- 超时定时器 ID 通过 PendingContext 管理，无需独立 map ---
-
-    // // --- 重连状态 ---
-    // bool     reconnectEnabled_{true};
-    // uint32_t retryCount_{0};
-    // ReconnectConfig reconnectConfig_;
-
-    // TimerId reconnectTimerId_;
-
-    // // --- 连接通知回调 ---
-    // ConnectionStateCallback connectionStateCallback_;
+    mutable std::mutex mutex_;
 };
 
 //=============================================================================

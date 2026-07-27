@@ -10,6 +10,8 @@ public:
 
     virtual void registerService(const std::string& serviceName, const Endpoint& ep) = 0;
     virtual void deregisterService(const std::string& serviceName, const Endpoint& ep) = 0;
+
+    virtual void shutdown() = 0;
 };
 
 #endif // CLEARMOON_RPC_ISSERVICEREGISTER_H

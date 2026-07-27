@@ -11,6 +11,13 @@ index_(Index)
 {
     tcpClient_.setConnectionCallback([this](cmlib::TcpConnectionPtr conn){ onConnection(std::move(conn)); });
     tcpClient_.setMessageCallback([this] (const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
+    tcpClient_.setCloseCallback([this](const cmlib::TcpConnectionPtr& conn){
+        cancelAllPending();
+        conn_.reset();
+        setState(ConnState::UNHEALTHY);
+
+        if(onDisconnected_)
+            onDisconnected_(); });
 }
 
 PooledConnection::~PooledConnection()
@@ -145,11 +152,6 @@ void PooledConnection::onConnection(const cmlib::TcpConnectionPtr& conn)
     if(conn->connected()){
         conn_ = conn;
         setState(ConnState::IDLE);
-    }
-    else {
-        cancelAllPending();
-        conn_.reset();
-        setState(ConnState::UNHEALTHY);
     }
 }
 

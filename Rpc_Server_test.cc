@@ -1,8 +1,10 @@
-#include "rpc_core/include/rpc_server.h"
+#include "Service/FileConfigRegister.h"
+#include "rpc_core/include/Rpc_server.h"
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
-#include "message.pb.h"
+#include "Message.pb.h"
 
+#include <fstream>
 #include <iostream>
 #include <memory>
 
@@ -10,10 +12,16 @@
 /// 注册 Echo 和 Add 两个函数，与 Rpc_Async_Client_Test 配合使用
 int main()
 {
-    EventLoop   loop;
-    InetAddress listenAddr("127.0.0.1", 1234, false);
+    cmlib::EventLoop   loop;
+    cmlib::InetAddress listenAddr("127.0.0.1", 12345, false);
 
-    RPCServer server(&loop, listenAddr);
+    auto registry = std::make_shared<FileConfigRegister>(&loop, "./config",5.0,RegistryMode::Server);
+
+    RPCServer server(&loop, listenAddr,registry);
+
+    //注册服务名
+    server.addService("EchoService");
+    server.addService("AddService");
 
     // ---- 注册 Echo 函数 ----
     server.registerMethod<CLRPC::EchoRequest, CLRPC::EchoResponse>(
@@ -35,7 +43,7 @@ int main()
             return resp;
         });
 
-    std::cout << "RPC Server running on 127.0.0.1:1234 ..." << std::endl;
+    std::cout << "RPC Server running on 127.0.0.1:12345 ..." << std::endl;
     std::cout << "Registered methods: Echo (id=0), Add (id=1)" << std::endl;
 
     server.start();

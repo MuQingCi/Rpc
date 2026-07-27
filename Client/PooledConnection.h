@@ -34,6 +34,7 @@ enum ConnState{
 class PooledConnection : public std::enable_shared_from_this<PooledConnection>
 {
 public:
+using DisconnectCallback = std::function<void()>;
     PooledConnection(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t Index);
     ~PooledConnection();
 
@@ -58,6 +59,8 @@ public:
 
     void removePending(uint64_t seq);
     void cancelAllPending();
+
+    void setOnDisconnected(DisconnectCallback cb) { onDisconnected_ = std::move(cb); }
 
     //判断连接是否健康与标记连接
     bool isHealthy() const { return isConnected() && state_ != ConnState::UNHEALTHY; }
@@ -108,6 +111,8 @@ private:
     std::map<uint64_t, PendingContext> pending_;
 
     mutable std::mutex mutex_;;
+
+    DisconnectCallback onDisconnected_;
 };
 
 // ===================================================================

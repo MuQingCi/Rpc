@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, const google::protobuf::Message& msg)
+void encode(cmlib::Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, const google::protobuf::Message& msg)
 {
     std::string body;
     if (!msg.SerializeToString(&body)) 
@@ -23,10 +23,10 @@ void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, 
 
     //Meta
     RPC_Meta netMeta{};
-    netMeta.seq = host64ToNet(meta.seq);
-    netMeta.method_id = host32ToNet(meta.method_id);
-    netMeta.timeout = host32ToNet(meta.timeout);
-    netMeta.err_code = host32ToNet(static_cast<uint32_t>(meta.err_code));
+    netMeta.seq = cmlib::host64ToNet(meta.seq);
+    netMeta.method_id = cmlib::host32ToNet(meta.method_id);
+    netMeta.timeout = cmlib::host32ToNet(meta.timeout);
+    netMeta.err_code = cmlib::host32ToNet(static_cast<uint32_t>(meta.err_code));
 
     buff->append(reinterpret_cast<const char*>(&netMeta), sizeof(RPC_Meta));
 
@@ -41,7 +41,7 @@ void encode(Buffer* buff, uint8_t flags, uint8_t version, const RPC_Meta& meta, 
     buff->prependInt16(RPC_MAGIC_NUMBER);
 }
 
-bool decode(Buffer* buff, Header& header, RPC_Meta& meta,std::string& body)
+bool decode(cmlib::Buffer* buff, Header& header, RPC_Meta& meta,std::string& body)
 {
     DecodeError err = DecodeError::NoError;
 
