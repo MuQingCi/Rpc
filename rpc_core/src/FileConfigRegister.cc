@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -46,61 +48,82 @@ FileConfigRegister::FileConfigRegister(cmlib::EventLoop* loop,
 
 FileConfigRegister::~FileConfigRegister()
 {
+    // 取消定时器需要在 IO 线程完成，但对象可能正在析构。
+    // 使用 shared_from_this 延长生命周期，并投递到 IO 线程执行
     auto self = shared_from_this();
 
-    if(pollerTimerId_.valid())
-    {
-        loop_->cancel(pollerTimerId_);
-        pollerTimerId_ = cmlib::TimerId{};
-    }
+    loop_->runInLoop([self] {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        if (self->pollerTimerId_.valid()) {
+            self->loop_->cancel(self->pollerTimerId_);
+            self->pollerTimerId_ = cmlib::TimerId{};
+        }
+    });
 }
 
 void FileConfigRegister::registerService(const std::string& serviceName, const Endpoint& endpoint)
 {
-    writeEndpointFile(serviceName, endpoint);
+    auto self = shared_from_this();
+    auto ep = endpoint;
+    loop_->runInLoop([self,serviceName, ep]{
+        self->writeEndpointFile(serviceName, ep);
+    });
 }
 
 void FileConfigRegister::deregisterService(const std::string& serviceName, const Endpoint& endpoint)
 {
-    removeEndpointFile(serviceName, endpoint);
+    auto self = shared_from_this();
+    auto ep = endpoint;
+    loop_->runInLoop([self,serviceName, ep]{
+        self->removeEndpointFile(serviceName, ep);
+    });
 }
 
 void FileConfigRegister::subscribe(const std::string& serviceName, EndpointListCallback callback)
 {
-    //订阅前先清空待取消订阅的服务队列
-    clearPendingUnsubscribe();
-
     if(mode_ == RegistryMode::Server)
     {
         LOG_ERROR << "subscribe() not allowed in Server mode";
         return;
     }
 
-    //移入对应服务的回调容器中
-    callbacks_[serviceName].push_back(std::move(callback));
-
-    //立刻调用回调
-    auto epIt = endpoints_.find(serviceName);
-    if(epIt != endpoints_.end())
+    std::vector<Endpoint> currentEndpoints;
+    EndpointListCallback cbCopy;
     {
-        callbacks_[serviceName].back()(epIt->second);
-    }
-    else {
-        callbacks_[serviceName].back()({});
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 清理待取消的订阅
+        for (const auto& name : pendingUnsubscribe_) {
+            callbacks_.erase(name);
+        }
+        pendingUnsubscribe_.clear();
+
+        callbacks_[serviceName].push_back(std::move(callback));
+        cbCopy = callbacks_[serviceName].back();
+
+        // 获取当前端点快照
+        auto it = endpoints_.find(serviceName);
+        if (it != endpoints_.end()) {
+            currentEndpoints = it->second;
+        }
+
+        // 启动轮询定时器（如果尚未启动）
+        if (!pollerTimerId_.valid()) {
+            auto self = shared_from_this();
+            pollerTimerId_ = loop_->runEvery(pollIntervalSec_, [self] {
+                self->loadAllEndPoints();
+            });
+        }
     }
 
-    // poolStarted_.store(true,std::memory_order_release);
-    auto self = shared_from_this();
-    if(!pollerTimerId_.valid())
-    {
-        pollerTimerId_ = loop_->runEvery(pollIntervalSec_, [self]{
-            self->loadAllEndPoints();
-        });
-    }
+    cbCopy(currentEndpoints);
 }
 
 void FileConfigRegister::unsubscribe(const std::string& serviceName)
 {
+    //采用延迟取消消除竞争
+    //真正的清理将在下一次 loadAllEndPoints 或 subscribe 中进行
+    std::lock_guard<std::mutex> lock(mutex_);
     pendingUnsubscribe_.insert(serviceName);
 }
 
@@ -112,8 +135,6 @@ void FileConfigRegister::loadAllEndPoints()
    //判断路径所指是否存在且为目录
     if(!fs::exists(configDir_,ec) || !fs::is_directory(configDir_, ec))
         return;
-
-    clearPendingUnsubscribe();
 
     //遍历目录中的文件
     for(auto& entry : fs::directory_iterator(configDir_,ec))
@@ -132,46 +153,73 @@ void FileConfigRegister::loadAllEndPoints()
         }
     }
 
-    //比较新旧并通知所有已订阅的服务
-    for(auto& [svc, cbList] : callbacks_)
-    {
-        auto oldIt = endpoints_.find(svc);
-        auto newIt = newEndpoints.find(svc);
-        bool changed = false;
+    // 2. 持锁更新状态，并收集需要通知的服务
+    std::vector<std::pair<std::string, std::vector<Endpoint>>> toNotify;
 
-        //服务已被移除
-        if(oldIt != endpoints_.end() && newIt == newEndpoints.end())
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        clearPendingUnsubscribe();
+        //比较新旧并通知所有已订阅的服务
+        for(auto& [svc, cbList] : callbacks_)
         {
-            changed = true;
-        }
-        //新增服务
-        else if(oldIt == endpoints_.end() && newIt != newEndpoints.end())
-        {
-            changed = true;
-        }
-        //比较各个端点是否发生变化
-        else if (oldIt != endpoints_.end() && newIt != newEndpoints.end()) 
-        {
-            //目前只判断大小和容器是否相等
-            if(oldIt->second.size() != newIt->second.size() || oldIt->second != newIt->second)
+            auto oldIt = endpoints_.find(svc);
+            auto newIt = newEndpoints.find(svc);
+            bool changed = false;
+
+            //服务已被移除
+            if(oldIt != endpoints_.end() && newIt == newEndpoints.end())
             {
                 changed = true;
             }
-        }
-
-        //若发生改变则调用回调
-        if(changed)
-        {
-            std::vector<Endpoint> notifyList;
-            if(newIt != newEndpoints.end())
-                notifyList = newIt->second;
-            for(auto&cb : cbList)
+            //新增服务
+            else if(oldIt == endpoints_.end() && newIt != newEndpoints.end())
             {
-                cb(notifyList);
+                changed = true;
+            }
+            //比较各个端点是否发生变化
+            else if (oldIt != endpoints_.end() && newIt != newEndpoints.end()) 
+            {
+                //目前只判断大小和容器是否相等
+                if(oldIt->second.size() != newIt->second.size() || oldIt->second != newIt->second)
+                {
+                    changed = true;
+                }
+            }
+
+            //若发生改变则调用回调
+            if(changed)
+            {
+                std::vector<Endpoint> notifyList;
+                if(newIt != newEndpoints.end())
+                    notifyList = newIt->second;
+                toNotify.emplace_back(svc, std::move(notifyList));
             }
         }
+
+        endpoints_ = std::move(newEndpoints);
+
+        if (callbacks_.empty() && pollerTimerId_.valid()) {
+            loop_->cancel(pollerTimerId_);
+            pollerTimerId_ = cmlib::TimerId{};
+        }
     }
-    endpoints_ = std::move(newEndpoints);
+
+    // 3. 在锁外通知所有变化的服务
+    for (auto& [svc, list] : toNotify) {
+        // 需要重新获取回调列表，因为通知时不能再持锁
+        // 注意：这里需要再次加锁读取 callbacks_，但必须复制后解锁。
+        std::vector<EndpointListCallback> cbs;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = callbacks_.find(svc);
+            if (it != callbacks_.end()) {
+                cbs = it->second;  // 复制整个 vector
+            }
+        }
+        for (auto& cb : cbs) {
+            cb(list);
+        }
+    }
 }
 
 /**
@@ -236,11 +284,12 @@ std::vector<Endpoint> FileConfigRegister::parseFile(const std::string& filePath)
     return endpoints;
 }
 
+// ===== 写端点文件（在 IO 线程执行） =====
 void FileConfigRegister::writeEndpointFile(const std::string& service, const Endpoint& ep)
 {
+    // 1.文件 I/O（锁外）
     //获取文件名
     std::string fileName = makeFileName(service, ep);
-
     //拼接文件名路径
     fs::path filePath = fs::path(configDir_) / fileName;
 
@@ -257,61 +306,52 @@ void FileConfigRegister::writeEndpointFile(const std::string& service, const End
     }
     out<<YAML::EndMap;
 
-    //将其写入文件
-    std::ofstream fout(filePath);
-    if(!fout){
-        LOG_ERROR<<"Cannot write endpoint file: " << filePath;
-        return;
+    {
+        //将其写入文件
+        std::ofstream fout(filePath);
+        if(!fout)
+        {
+            LOG_ERROR<<"Cannot write endpoint file: " << filePath;
+            return;
+        }
+        fout<<out.c_str();
+        fout.close();
     }
 
-    fout<<out.c_str();
-    fout.close();
     LOG_INFO<<"Registered endpoint: " << filePath;
 
-    if(loop_->isInThread())
+    // 2. 更新内存状态（锁内）
+    std::vector<Endpoint> notifyList;
+    std::vector<EndpointListCallback> cbs;
+
     {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 更新 endpoints_
         auto& vec = endpoints_[service];
 
         //查找该服务节点是否存在（去重检查）,存在就更新
-        auto vecIt = std::find_if(vec.begin(),vec.end(), [&ep](const Endpoint& e){
-            return ep == e;
-        });
-
-        if(vecIt != vec.end())  //存在
-        {
-            vecIt->weight = ep.weight;
-            vecIt->metadata = ep.metadata;
+        auto it = std::find_if(vec.begin(), vec.end(), [&ep](const Endpoint& e) { return e == ep; });
+        if (it != vec.end()) {
+            it->weight = ep.weight;
+            it->metadata = ep.metadata;
+        } else {
+            vec.push_back(ep);
         }
-        else
-            endpoints_[service].push_back(ep);
 
+        // 清理 pending 并获取回调
         clearPendingUnsubscribe();
-        //通知订阅者
-        auto it = callbacks_.find(service);
-        if(it!=callbacks_.end())
-        {
-            std::vector<Endpoint> list = endpoints_[service];
-            for(auto& cb : it->second)
-                cb(list);
+
+        auto cbIt = callbacks_.find(service);
+        if (cbIt != callbacks_.end()) {
+            cbs = cbIt->second;
+            notifyList = endpoints_[service];  // 副本
         }
     }
-    else {
-        auto self = shared_from_this();
-        loop_->runInLoop(
-            [self,service,ep]{
-            self->endpoints_[service].push_back(ep);
-            
-            self->clearPendingUnsubscribe();
 
-            //通知订阅者
-            auto it = self->callbacks_.find(service);
-            if(it!= self->callbacks_.end())
-            {
-                std::vector<Endpoint> list = self->endpoints_[service];
-                for(auto& cb : it->second)
-                    cb(list);
-            }
-        });
+    // 3. 锁外通知
+    for (auto& cb : cbs) {
+        cb(notifyList);
     }
 }
 
@@ -319,86 +359,53 @@ void FileConfigRegister::writeEndpointFile(const std::string& service, const End
  * @brief 用于移除整个yaml文件(此函数只使用于一个yaml只包含一个Endpoint的情况)
     实现思路:
     1.先删除对应yaml文件
-    2.在io线程中删除对应endpoints_中目标service对应的vector中的目的Endpoint
-    3.在io线程中通知所有订阅了这个service的订阅者
+    2.在互斥锁区中删除对应endpoints_中目标service对应的vector中的目标Endpoint(拷贝对应的端点数组和回调数组)
+    3.在互斥锁区外通知所有订阅了这个service的订阅者
  * 
  * @param service 
  * @param ep 
  */
 void FileConfigRegister::removeEndpointFile(const std::string& service, const Endpoint& ep)
 {
+    // 1. 文件 I/O（锁外）
     std::string fileName = makeFileName(service, ep);
     fs::path filePath = fs::path(configDir_) / fileName;
-    
     std::error_code ec;
-    fs::remove(filePath,ec);
-    if(ec)
-    {
-        LOG_ERROR << "Failed to remove endpoint file: " << filePath << "- " << ec.message();
+    fs::remove(filePath, ec);
+    if (ec) {
+        LOG_ERROR << "Failed to remove endpoint file: " << filePath << " - " << ec.message();
         return;
     }
     LOG_INFO << "Deregistered Endpoint file: " << filePath;
 
-    if(loop_->isInThread())
+    // 2. 内存更新（锁内）
+    std::vector<Endpoint> notifyList;
+    std::vector<EndpointListCallback> cbs;
     {
-        auto it = endpoints_.find(service);
-        if(it != endpoints_.end())
-        {
-            auto& vec = it->second;
-            //清除vec中满足lambd表达式中的Endpoint(即两个Endpoint相等)
-            vec.erase(std::remove_if(vec.begin(), vec.end(), [&ep](const Endpoint& endpoint){ return endpoint == ep; }),vec.end());
+        std::lock_guard<std::mutex> lock(mutex_);
 
-            //若此时vec为空则删除整个key
-            if(vec.empty()) endpoints_.erase(it);
+        auto it = endpoints_.find(service);
+        if (it != endpoints_.end()) {
+            auto& vec = it->second;
+            vec.erase(std::remove_if(vec.begin(), vec.end(),
+                                     [&ep](const Endpoint& e) { return e == ep; }),
+                      vec.end());
+            if (vec.empty()) endpoints_.erase(it);
         }
 
+        // 清理 pending
         clearPendingUnsubscribe();
 
-        //通知订阅者
         auto cbIt = callbacks_.find(service);
-        if(cbIt != callbacks_.end())
-        {
-            std::vector<Endpoint> list;
-            //如果此时endpoint中还存在服务对应的端点数组则将其复制给list
-            if(endpoints_.count(service)) list = endpoints_[service];
-            for(auto& cb : cbIt->second) cb(list);
+        if (cbIt != callbacks_.end()) {
+            cbs = cbIt->second;
+            if (endpoints_.count(service)) notifyList = endpoints_[service];
         }
     }
-    else {
-        auto self = shared_from_this();
 
-        loop_->runInLoop([self, service,ep]
-        {
-            auto it = self->endpoints_.find(service);
-            if(it != self->endpoints_.end())
-            {
-                auto& vec = it->second;
-                //清除vec中满足lambd表达式中的Endpoint(即两个Endpoint相等)
-                vec.erase(
-                    std::remove_if(vec.begin(),
-                                    vec.end(), 
-                                          [&ep](const Endpoint& endpoint)
-                {
-                    return ep == endpoint;
-                }),
-                     vec.end());
-                //若此时vec为空则删除整个key
-                if(vec.empty()) self->endpoints_.erase(it);
-            }
-
-            self->clearPendingUnsubscribe();
-
-            //通知订阅者
-            auto cbIt = self->callbacks_.find(service);
-            if(cbIt != self->callbacks_.end())
-            {
-                std::vector<Endpoint> list;
-                //如果此时endpoint中还存在服务对应的端点数组则将其复制给list
-                if(self->endpoints_.count(service)) 
-                    list = self->endpoints_[service];
-                for(auto& cb : cbIt->second) cb(list);
-            }
-        });
+    // 3. 锁外通知
+    for (auto& cb : cbs) {
+        cb(notifyList);
     }
 }
 

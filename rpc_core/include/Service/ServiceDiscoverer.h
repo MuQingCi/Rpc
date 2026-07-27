@@ -13,7 +13,11 @@
 
 namespace cmlib = clearmoon::net;
 
-class ServiceDiscoverer : std::enable_shared_from_this<ServiceDiscoverer>
+/**
+ * @brief 由于FileConfigRegister没有互斥锁mutex和其他防资源竞争的手段，故本类中的订阅和取消订阅都得保证在IO线程中
+ * 
+ */
+class ServiceDiscoverer : public std::enable_shared_from_this<ServiceDiscoverer>
 {
 public:
 using EndpointChangeCallback = std::function<void(std::vector<Endpoint>)>;

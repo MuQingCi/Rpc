@@ -19,32 +19,46 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
 #include <utility>
 #include <ifaddrs.h>
 
-RPCServer::RPCServer(EventLoop* loop, InetAddress& listenAddr) : tcpServer_(loop, TcpServer::ThreadPoolInitCallback(), listenAddr), taskThreadPool_(std::make_unique<TaskThreadPool>()) //任务线程池的线程数默认为8
+RPCServer::RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr) : tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr), taskThreadPool_(std::make_unique<TaskThreadPool>()),
+listenAddr_(listenAddr) //任务线程池的线程数默认为8
 {
-    tcpServer_.setMessageCallback([this](const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm) { onMessage(conn, buff, tm); });
+    tcpServer_.setMessageCallback([this](const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
 
     taskThreadPool_->start();
 }
 
-RPCServer::RPCServer(EventLoop* loop, 
-                     InetAddress& listenAddr,
+RPCServer::RPCServer(cmlib::EventLoop* loop, 
+                     cmlib::InetAddress& listenAddr,
                      std::shared_ptr<isServiceRegister> registry,
                      const std::string& serviceName) 
                     : tcpServer_(loop, 
-                        TcpServer::ThreadPoolInitCallback(), 
+                        cmlib::TcpServer::ThreadPoolInitCallback(), 
                         listenAddr),
                        taskThreadPool_(std::make_unique<TaskThreadPool>()),
                        listenAddr_(listenAddr),
-                       registry_(std::move(registry)),
-                       serviceName_(serviceName)
+                       registry_(std::move(registry))
 {
-    tcpServer_.setMessageCallback([this](const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm) { onMessage(conn, buff, tm); });
+    if(!serviceName.empty()) serviceNames_.insert(serviceName);
+    tcpServer_.setMessageCallback([this](const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
+    taskThreadPool_->start();
+}
+
+RPCServer::RPCServer(cmlib::EventLoop* loop, 
+                     cmlib::InetAddress& listenAddr,
+                     std::shared_ptr<isServiceRegister> registry)
+                    :tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr),
+                    taskThreadPool_(std::make_unique<TaskThreadPool>()),
+                    listenAddr_(listenAddr),
+                    registry_(std::move(registry))
+{
+    tcpServer_.setMessageCallback([this](const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
     taskThreadPool_->start();
 }
 
@@ -53,7 +67,7 @@ RPCServer::~RPCServer()
     stop();
 }
 
-void RPCServer::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp tm)
+void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm)
 {   
 
     uint32_t minLen = sizeof(Header) + sizeof(RPC_Meta);
@@ -75,8 +89,8 @@ void RPCServer::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp 
 
         if(header.Flags == 0)
         {
-            std::weak_ptr<TcpConnection> weakPtr = conn;
-            EventLoop* ioloop = conn->getLoop();
+            std::weak_ptr<cmlib::TcpConnection> weakPtr = conn;
+            cmlib::EventLoop* ioloop = conn->getLoop();
 
             auto it = handles_.find(meta.method_id);
             if(it == handles_.end())
@@ -114,7 +128,7 @@ void RPCServer::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp 
                     auto conn = weakPtr.lock();
                     if (conn && conn->connected() && respShared)
                     {
-                        Buffer sendBuff;
+                        cmlib::Buffer sendBuff;
                         encode(&sendBuff, 1, 1, meta, *respShared);
 
                         conn->send(&sendBuff);
@@ -128,24 +142,40 @@ void RPCServer::onMessage(const TcpConnectionPtr& conn, Buffer* buff, Timestamp 
 
 void RPCServer::start()
 {
+    std::unique_lock<std::mutex> lock(mutex_);
     if(started_) return;
-    tcpServer_.start();
-    started_ = true;
 
-    if(registry_)
+    if(registry_ && !serviceNames_.empty())
     {
         Endpoint ep;
         ep.host = getLocalIp();
         ep.port = listenAddr_.toPort();
         ep.weight = 1;
-        registry_->registerService(serviceName_, ep);
+
+        for(const auto& svc : serviceNames_)
+        {
+            ep.service = svc;
+            registry_->registerService(svc, ep);
+            LOG_INFO << "Service " << svc << " registered at " << ep.host << ":" << ep.port;
+        }
+    }else {
+        throw std::runtime_error("No service names configured");
     }
+
+    tcpServer_.start();
+    started_ = true;
 }
 
 void RPCServer::stop()
 {
-    if(!started_) return;
-    
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if(!started_) return;
+        started_ = false;
+    }
+    tcpServer_.stop();
+
+    std::unique_lock<std::mutex> lock(mutex_);
     if(registry_)
     {
         Endpoint ep;
@@ -153,11 +183,33 @@ void RPCServer::stop()
         ep.port = listenAddr_.toPort();
         ep.weight = 1;
 
-        registry_->deregisterService(serviceName_, ep);
-        LOG_INFO << "Service " << serviceName_ << " deregistered at " << ep.host << ":" << ep.port;
+        for(const auto& svc : serviceNames_)
+        {
+            ep.service = svc;
+            registry_->deregisterService(svc, ep);
+            LOG_INFO << "Service " << svc << " deregistered at " << ep.host << ":" << ep.port;
+        }
     }
-    tcpServer_.stop();
-    started_ = false;
+}
+
+void RPCServer::addService(const std::string& serviceName)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    if(serviceNames_.count(serviceName))
+    {
+        LOG_WARNING << "The serviceName has found in serviceNameSet";
+        return;
+    }
+    serviceNames_.insert(serviceName);
+
+    Endpoint ep;
+    ep.service = serviceName;
+    ep.host = getLocalIp();
+    ep.port = listenAddr_.toPort();
+    ep.weight = 1;
+
+    if(started_)
+        registry_->registerService(serviceName, ep);
 }
 
 //-------私有成员函数-------
@@ -198,5 +250,6 @@ std::string RPCServer::getLocalIp() const
         freeifaddrs(ifAddrStruct);
     }
 
+    LOG_WARNING<<"GetLocalIp return ip is 127.0.0.1";
     return "127.0.0.1";
 }

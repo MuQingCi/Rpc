@@ -16,7 +16,9 @@
 #include <google/protobuf/message.h>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <netinet/in.h>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -31,8 +33,10 @@ using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(cons
 
     RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr);
 
-    //含配置注册的构造函数
+    //含配置注册的构造函数--单服务
     RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry, const std::string& serviceName = std::string());
+
+    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry);
 
     ~RPCServer();
 
@@ -43,6 +47,8 @@ using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(cons
 
     void start();
     void stop();
+
+    void addService(const std::string& serviceName);
 private:
     std::string getLocalIp() const;
 
@@ -64,7 +70,9 @@ private:
     //服务配置类
     std::shared_ptr<isServiceRegister> registry_;
     //服务名
-    std::string serviceName_;
+    std::set<std::string> serviceNames_;
+
+    mutable std::mutex mutex_;
 };
 
 template<typename Request, typename  Response>

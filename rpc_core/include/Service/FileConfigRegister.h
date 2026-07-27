@@ -12,6 +12,7 @@
 
 // #include <atomic>
 #include <map>
+#include <mutex>
 #include <set>
 #include <memory>
 #include <string>
@@ -78,7 +79,8 @@ private:
     std::set<std::string> pendingUnsubscribe_;
 
     cmlib::TimerId pollerTimerId_;
-    // std::atomic<bool> poolStarted_ = {false};
+
+    mutable std::mutex mutex_;
 };
 
 #endif //CLEARMOON_RPC_FILECONFIGREGISTER_H
