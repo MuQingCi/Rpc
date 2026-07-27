@@ -36,9 +36,7 @@ using ServerName = std::string;
     ConnectionPool(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t poolSize, LoadBalanceStrategy strategy = LoadBalanceStrategy::RoundRobin);
 
     //服务分发版
-    ConnectionPool(cmlib::EventLoop* loop, 
-                   const cmlib::InetAddress& serverAddr, 
-                   size_t poolSize, 
+    ConnectionPool(cmlib::EventLoop* loop,
                    LoadBalanceStrategy strategy,
                    size_t connPerServer
                 );
@@ -89,6 +87,7 @@ using ServerName = std::string;
     size_t size() const { return connections_.size(); }
 
     void updateEndpoints(const std::vector<Endpoint>& epVec);
+    void removeService(const std::string serviceName);
 
 private:
     //服务组(一个组包含一个端点及端点上的连接)

@@ -5,19 +5,11 @@
 #include "net/InetAddress.h"
 #include "net/Log/Logger.h"
 
-#include "net/EventLoop.h"
-#include "net/TimerId.h"
-#include <atomic>
-#include <cstddef>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
 #include <random>
 #include <set>
-#include <string>
 #include <utility>
-#include <vector>
 
 //无服务分发
 ConnectionPool::ConnectionPool(cmlib::EventLoop* loop, 
@@ -40,13 +32,9 @@ ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
 
 //服务分发版(service暂不使用)
 ConnectionPool::ConnectionPool(cmlib::EventLoop* loop, 
-                               const cmlib::InetAddress& serverAddr, 
-                               size_t poolSize, 
                                LoadBalanceStrategy strategy,
                                size_t connPerServer)
                              : loop_(loop),
-                               serverAddr_(serverAddr),
-                               connNum_(poolSize),
                                strategy_(strategy),
                                connPerServer_(connPerServer)
 {
@@ -124,6 +112,7 @@ ConnectionPool::Borrowed ConnectionPool::acquire(const ServerName& name)
 }
 
 // ========== 动态更新端点 ==========
+//updateEndpoints 会立刻断开已移除端点的所有连接，正在处理中的请求将失败。
 void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
 {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -143,7 +132,11 @@ void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
             //ServiceEntry: std::vector<ServerConnGroup>, endpointRrIndex{0}m,,std::atomic<size_t> endpointRrIndex{0};
             for(auto& g : it->second.groups)
                 for(auto& conn : g.connections)
+                {
+                    LOG_INFO<<"Disconnect a Connection from "<<g.endpoint.host<<":" << g.endpoint.port;
                     conn->Disconnect();
+                }
+                    
             it = servers_.erase(it);
         }else ++it;
     }
@@ -239,6 +232,21 @@ void ConnectionPool::updateEndpoints(const std::vector<Endpoint>& epVec)
     if(!healthCheckTimerId_.valid())
         startHealthCheck();
 }
+
+void ConnectionPool::removeService(const std::string serviceName)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    
+    auto it = servers_.find(serviceName);
+    if(it != servers_.end())
+    {
+        for(auto& g : it->second.groups)
+            for(auto&conn : g.connections)
+                conn->Disconnect();
+        servers_.erase(it);
+    }
+}
+
 
 //----------私有成员函数----------
 
@@ -387,7 +395,7 @@ ConnectionPool::Borrowed ConnectionPool::acquireRandom(ServerConnGroup& group)
     throw RpcConnectionException("No Healthy Connection avaiable!");
 }
 
-
+//健康检查 isConnected() 与状态设置存在窗口：doHealthCheck 检测到 !isConnected()后设置 UNHEALTHY，但 onConnection 回调可能随后将状态恢复为 IDLE，导致重复 Connect()
 void ConnectionPool::doHealthCheck()
 {
     decltype(connections_) toReconnect;
