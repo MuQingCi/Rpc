@@ -367,7 +367,7 @@ void TcpConnection::handleRead()
     }
     else {
         if(savedErrno != EAGAIN)
-        //TODO 处理错误
+        LOG_ERROR << "read Buffer error!";
         handleError();
     }
         

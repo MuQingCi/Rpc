@@ -25,6 +25,7 @@ public:
 
     void setConnectionCallback(const ConnectionCallback& cb) { connectionCallback_ = cb; }
     void setMessageCallback(const MessageCallback& cb) { messageCallback_ = cb; }
+    void setCloseCallback(const CloseCallback& cb){ closeCallback_ = cb; }
 
     TcpConnectionPtr connection() const { return connection_; }
     EventLoop* getLoop() const { return loop_; }
@@ -42,6 +43,7 @@ private:
 
     ConnectionCallback connectionCallback_;
     MessageCallback messageCallback_;
+    CloseCallback closeCallback_;
 };
 
 } // namespace net

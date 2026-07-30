@@ -5,6 +5,8 @@ add_library(rpc_core STATIC
     src/ToolFunc.cc
     src/TaskThreadPool.cc
     src/FileConfigRegister.cc
+    src/EtcdRegister.cc
+    src/EtcdDiscovery.cc
 )
 
 # 设置公开包含路径，供外部目标使用
@@ -17,12 +19,19 @@ target_include_directories(rpc_core PUBLIC
 
 # 链接时，将 yaml-cpp 设为 PUBLIC，让依赖者自动链接
 find_package(yaml-cpp REQUIRED)
-
+find_package(cpprestsdk REQUIRED)
 # 链接 rpc_core 所需的库
 target_link_libraries(rpc_core PUBLIC
     ClearMoon          # 链接 clearmoon 网络库（TcpServer、EventLoop 等）
     protobuf::libprotobuf  # 链接 protobuf 运行时库（支持 message 序列化/反序列化）
     yaml-cpp::yaml-cpp
+    /usr/local/lib/libetcd-cpp-api.so    # etcd 客户端（直接链接 .so，避免 cmake find_package 级联冲突）
+    cpprestsdk::cpprest
+)
+
+# etcd 头文件路径（直接指定，避免通过 cmake config 触发 gRPC→protobuf 版本冲突）
+target_include_directories(rpc_core PUBLIC
+    /usr/local/include
 )
 
 find_package(absl REQUIRED)

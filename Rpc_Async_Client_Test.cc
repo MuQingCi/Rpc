@@ -1,4 +1,5 @@
 #include "Client/Client.h"
+#include "EtcdDiscovery.h"
 #include "Service/FileConfigRegister.h"
 #include "net/EventLoop.h"
 #include "net/EventLoopThread.h"
@@ -94,8 +95,9 @@ int main()
     EventLoop* loop = loopThread.start();
 
     // InetAddress serverAddr("127.0.0.1", 1234, false);
-    auto discovery = std::make_shared<FileConfigRegister>(loop,
-    "./config",1.0,RegistryMode::Client);
+    // auto discovery = std::make_shared<FileConfigRegister>(loop,
+    // "./config",1.0,RegistryMode::Client);
+    auto discovery = std::make_shared<EtcdDiscovery>(loop,"http://127.0.0.1:2379");
 
     int ret = 0;
     {

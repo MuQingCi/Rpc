@@ -34,7 +34,7 @@ void TcpClient::disconnect()
     if (connection_)
     {
         connection_->shutdown();
-        connection_.reset();   // 防止 ~TcpClient() 重复 forceClose()
+        // connection_.reset();   // 防止 ~TcpClient() 重复 forceClose()
     }
 }
 
@@ -65,5 +65,7 @@ void TcpClient::removeConnection(const TcpConnectionPtr& conn)
     {
         connection_.reset();
         conn->connectDestroyed();
+
+        if(closeCallback_) closeCallback_(conn);
     }
 }

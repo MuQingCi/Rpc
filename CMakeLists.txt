@@ -47,8 +47,8 @@ target_link_libraries(Rpc_Async_Client_Test
     absl::log_internal_message
     # ${ZOOKEEPER_LIBRARY}
 )
-# 需要 C++20 以支持协程
-target_compile_features(Rpc_Async_Client_Test PRIVATE cxx_std_20)
+# # 需要 C++20 以支持协程
+# target_compile_features(Rpc_Async_Client_Test PRIVATE cxx_std_20)
 
 # # RPC 服务端
 # add_executable(Rpc_Server
@@ -87,5 +87,5 @@ target_link_libraries(Rpc_Server_WithLogic
     pthread
     absl::log_internal_check_op
     absl::log_internal_message
-    ${ZOOKEEPER_LIBRARY}
+    # ${ZOOKEEPER_LIBRARY}
 )

@@ -1,3 +1,4 @@
+#include "EtcdRegister.h"
 #include "Service/FileConfigRegister.h"
 #include "rpc_core/include/Rpc_server.h"
 #include "net/EventLoop.h"
@@ -15,7 +16,11 @@ int main()
     cmlib::EventLoop   loop;
     cmlib::InetAddress listenAddr("127.0.0.1", 12345, false);
 
-    auto registry = std::make_shared<FileConfigRegister>(&loop, "./config",5.0,RegistryMode::Server);
+    //文件配置
+    // auto registry = std::make_shared<FileConfigRegister>(&loop, "./config",5.0,RegistryMode::Server);
+
+    //etcd配置
+    auto registry = std::make_shared<EtcdRegister>(&loop,"http://127.0.0.1:2379",10,3);
 
     RPCServer server(&loop, listenAddr,registry);
 
