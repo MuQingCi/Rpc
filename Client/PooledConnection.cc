@@ -1,8 +1,10 @@
 #include "PooledConnection.h"
+#include "ToolFunc.h"
 #include "net/TimerId.h"
 #include "net/Log/Logger.h"
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <utility>
 
@@ -95,16 +97,25 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
         if (!decode(buff, header, meta, body))
             break;
 
-        if (header.Flags == 3) // ACK 确认
+        if (header.Flags == static_cast<uint8_t>(Flag::kAck)) // ACK 确认
         {
             if (conn_)
                 conn_->ackReceived(meta.seq);
             continue;
         }
 
-        if (header.Flags == 1) // 响应
+        if (header.Flags == static_cast<uint8_t>(Flag::kResponse)) // 响应
         {
-            std::function<void(const std::string&)> callback;
+            if(meta.retransmit == 1)
+            {
+                auto metaCopy = meta;
+                metaCopy.retransmit = 0;
+                cmlib::Buffer ackBuff;
+                encode(&ackBuff, Flag::kAck, kVersion, metaCopy, nullptr);
+                conn->send(&ackBuff);
+            }
+
+            std::function<void(const std::string&, int32_t)> callback;
 
             // 1. 临界区：取出回调并标记 completed
             {
@@ -130,7 +141,7 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
             if (callback)
             {
                 try {
-                    callback(body);
+                    callback(body, meta.err_code);
                 } catch (std::exception& e) {
                     LOG_ERROR<< "RPCClient MessageHandleCallback error: " << e.what();
                 }

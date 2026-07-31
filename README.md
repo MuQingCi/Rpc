@@ -479,7 +479,7 @@ awaiter->await_resume()
 
 | 特性                    | FileConfigRegister      | EtcdRegister + EtcdDiscovery|
 | -----------------------| ------------------------ | ----------------------------|
-| **后端存储**            | 本地 YAML 文件           | etcd 分布式 KV 存储          |
+| **后端存储**            | 本地 YAML 文件           | 外部 etcd 服务（通过 etcd-cpp-api 客户端连接） |
 | **数据变更通知**        | 定时轮询（可配间隔）      | Watch 机制（实时推送）        |
 | **服务存活保证**        | 文件存在即存活            | Lease 续约 + TTL 自动过期    |
 | **进程异常退出处理**    | 需手动清理文件            | Lease 超时后 key 自动清理     |

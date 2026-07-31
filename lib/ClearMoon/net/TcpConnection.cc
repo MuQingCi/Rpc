@@ -14,9 +14,9 @@
 using namespace clearmoon;
 using namespace clearmoon::net;
 
-const uint32_t TcpConnection::RetransmitEntry::kBaseTimeout = 1;    //初始超时重传时间为1000ms
+const uint32_t TcpConnection::RetransmitEntry::kBaseTimeoutMs = 200;    //初始超时重传时间为1000ms
 
-const uint32_t TcpConnection::RetransmitEntry::kMaxTimeout = 10;    //最大延迟为10s
+const uint32_t TcpConnection::RetransmitEntry::kMaxTimeoutMs = 10000;    //最大延迟为10s
 
 thread_local std::mt19937 rng(std::random_device{}());
 
@@ -30,8 +30,7 @@ std::chrono::milliseconds caculate_backoff_jitter(
     uint32_t base_delay_ms,
     uint32_t retries,
     uint32_t max_delay_ms,
-    std::mt19937& rng
-)
+    std::mt19937& rng)
 {
     uint64_t cap_ms = base_delay_ms;
 
@@ -279,6 +278,9 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
         n = ::write(channel_.getFd(), data, len);
         if(n >= 0)
         {
+            //触发超时重传时也需更新空闲定时器
+            resetIdleTimer();
+            
             if(static_cast<size_t>(n) == len)
             {
                 if(writeCompleteCallback_) writeCompleteCallback_(shared_from_this());
@@ -556,9 +558,10 @@ void TcpConnection::resetRetransmitTimer(RetransmitEntry& entry)
     }
 
     //指数退避计算时间
-    auto timeout = caculate_backoff_jitter(RetransmitEntry::kBaseTimeout, entry.retries, RetransmitEntry::kMaxTimeout, rng);
+    auto timeout = caculate_backoff_jitter(RetransmitEntry::kBaseTimeoutMs, entry.retries, RetransmitEntry::kMaxTimeoutMs, rng);
 
-    entry.timerId = loop_->runAfter(timeout.count() / 1000.0, [this, seq = entry.seq]{
+    auto seconds = timeout.count() / 1000.0;
+    entry.timerId = loop_->runAfter(seconds, [this, seq = entry.seq]{
         onRetransmitTimeout(seq);
     });
 }

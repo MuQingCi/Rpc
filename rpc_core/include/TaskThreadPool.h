@@ -6,6 +6,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <utility>
 #include <vector>
 #include <thread>
 
@@ -23,8 +24,12 @@ public:
     void stop();
 
     template<typename T>
-    void enqueue(T&& t);
+    bool tryEnqueue(T&&t);
+
 private:
+    template<typename T>
+    bool enqueue(T&& t);
+
     std::vector<std::thread> threads_;
     std::queue<Task> taskQueue_;
     //互斥锁与条件变量
@@ -40,15 +45,27 @@ private:
 };
 
 template<typename T>
-void TaskThreadPool::enqueue(T&& t)
+bool TaskThreadPool::tryEnqueue(T&&t)
 {
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if(!started_ || taskQueue_.size() >= kMaxTaskNum_) return;
-        taskQueue_.emplace(std::forward<T>(t));
-    }
-    
+    std::unique_lock<std::mutex>lock(mutex_);
+    if(taskQueue_.size() >= kMaxTaskNum_)
+        return false;
+    return enqueue(t);
+}
+
+
+template<typename T>
+bool TaskThreadPool::enqueue(T&& t)
+{
+    // {
+    //     std::unique_lock<std::mutex> lock(mutex_);
+    //     if(!started_ || taskQueue_.size() >= kMaxTaskNum_) return;
+    //     taskQueue_.emplace(std::forward<T>(t));
+    // }
+    taskQueue_.emplace(std::forward<T>(t));
+
     cond_.notify_one();
+    return true;
 }
 
 #endif

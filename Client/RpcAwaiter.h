@@ -28,7 +28,12 @@ public:
     Response await_resume()
     {
         if(error_)
-            throw RpcTimeoutException(seq_, static_cast<uint32_t>(timeout_.count()));
+        {
+            if(errCode_ > 0)
+                throw RpcRemoteException(errCode_);
+            else
+                throw RpcTimeoutException(seq_, static_cast<uint32_t>(timeout_.count()));
+        }
         if(response_.empty())
             throw RpcConnectionException("Connection closed or cancelled!");
         Response res;
@@ -39,8 +44,12 @@ public:
 
     //成员函数
     void setResponse(std::string body) { response_ = std::move(body); }
-    void setError() { error_ = true; }
 
+    void setError() { setError(-1); }
+    void setError(int32_t code) 
+    { 
+        error_ = true; errCode_ = code; 
+    }
     void resume()
     {
         if(handle_)
@@ -67,6 +76,7 @@ private:
     std::coroutine_handle<> handle_;
     std::string response_;
     bool error_{false};
+    int32_t errCode_{0};
 };
 
 #endif //CLEARMOON_RPC_RPCAWAITER_H

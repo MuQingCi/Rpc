@@ -55,6 +55,9 @@ using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(cons
     void addService(const std::string& serviceName);
 private:
     std::string getLocalIp() const;
+    void sendErrorResponse(const cmlib::TcpConnectionPtr& conn,
+                           const RPC_Meta& requestMeta,
+                           RpcErrorCode errcode);
 
     //echo处理逻辑
     std::string handleMessage(const std::string& msg);

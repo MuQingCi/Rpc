@@ -82,7 +82,7 @@ private:
     {
         std::shared_ptr<void> awaiter;  //类型擦除
         std::function<void()> cancel;
-        std::function<void(std::string)> onResponse;
+        std::function<void(std::string, int32_t)> onResponse;
 
         cmlib::TimerId timerId;   //超时取消定时器
         uint64_t seq;             //请求序列号
@@ -141,10 +141,11 @@ void PooledConnection::sendRequest(const Request& request,
     meta.method_id = method_id;
     meta.timeout = static_cast<uint32_t>(timeout.count());
     meta.err_code = 0;
+    meta.retransmit = 1; //若使用超时重传则设置为1,普通发送则设置为0
 
     //3.编码为Buffer
     cmlib::Buffer sendBuff;
-    encode(&sendBuff, 0, 1, meta, request);
+    encode(&sendBuff, Flag::kRequest, kVersion, meta, &request);
 
     //4.在pendings_中注册
     {
@@ -158,17 +159,21 @@ void PooledConnection::sendRequest(const Request& request,
 
         auto self = shared_from_this();
 
+        //超时取消回调
         ctx.cancel = [awaiter,seq,self]
         {
-            awaiter->setError();
+            awaiter->setError(-1);  //本地超时
             awaiter->resume();
             if(self->conn_)
                 self->conn_->ackReceived(seq);
             self->activerequests_.fetch_sub(1,std::memory_order_relaxed);
         };
 
-        ctx.onResponse = [awaiter](std::string body){
-            awaiter->setResponse(std::move(body));
+        ctx.onResponse = [awaiter](std::string body,int32_t err_code){
+            if(err_code == 0)
+                awaiter->setResponse(std::move(body));
+            else
+                awaiter->setError(err_code);    //远程错误码
             awaiter->resume();
         };
 

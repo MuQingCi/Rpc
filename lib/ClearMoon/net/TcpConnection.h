@@ -104,8 +104,8 @@ private:
         uint32_t retries = 0;
         TimerId timerId;
         static const uint32_t kMaxRetries = 5;
-        static const uint32_t kBaseTimeout;
-        static const uint32_t kMaxTimeout;
+        static const uint32_t kBaseTimeoutMs;
+        static const uint32_t kMaxTimeoutMs;
     };
 
     void resetRetransmitTimer(RetransmitEntry& entry);

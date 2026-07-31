@@ -38,5 +38,14 @@ public:
 // /=============================================================================
 // / @brief Rpc服务异常
 // /=============================================================================
+class RpcRemoteException : public std::runtime_error {
+public:
+    explicit RpcRemoteException(int32_t code)
+        : std::runtime_error("RPC remote error, code=" + std::to_string(code)), code_(code) {}
+    int32_t code() const { return code_; }
+private:
+    int32_t code_;
+};
+
 
 #endif // CLEARMOON_RPC_EXCEPTIONS_H

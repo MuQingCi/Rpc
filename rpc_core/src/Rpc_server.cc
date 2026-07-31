@@ -2,6 +2,7 @@
 #include "Service/Endpoint.h"
 #include "TaskThreadPool.h"
 #include "Message.pb.h"
+#include "ToolFunc.h"
 #include "net/Buffer.h"
 #include "net/EventLoop.h"
 #include "net/Log/Logger.h"
@@ -13,6 +14,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <netinet/in.h>
@@ -75,62 +77,112 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
         
         if(!decode(buff, header, meta, body)) break;
 
-        if (header.Flags == 3) // ACK 确认
+        if (header.Flags == static_cast<uint8_t>(Flag::kAck)) // ACK 确认
         {
             if (conn)
                 conn->ackReceived(meta.seq);
             continue;
         }
 
-        if(header.Flags == 0)
+        if(header.Flags == static_cast<uint8_t>(Flag::kRequest))   //请求
         {
-            std::weak_ptr<cmlib::TcpConnection> weakPtr = conn;
-            cmlib::EventLoop* ioloop = conn->getLoop();
+            if(meta.retransmit == 1)
+            {
+                auto metaCopy = meta;
+                metaCopy.retransmit = 0;
+                cmlib::Buffer ackBuff;
+                encode(&ackBuff, Flag::kAck, kVersion, metaCopy, nullptr);
+                conn->send(&ackBuff);
+            }
 
             auto it = handles_.find(meta.method_id);
             if(it == handles_.end())
             {
                 LOG_ERROR << "Method not found";
-                // taskThreadPool_->enqueue(
-                //     [weakPtr,ioloop,tm,meta = std::move(meta)] 
-                //     { 
-                //         ioloop->runInLoop
-                //         ([weakPtr, meta = std::move(meta)]{
-                //         auto conn = weakPtr.lock();
-                //         Buffer sendBuff;
-                //         encode(&sendBuff, 1, 1, meta, const google::protobuf::Message &msg)
-                //         conn->send();
-                //         });
-                //     });
+                sendErrorResponse(conn, meta, RpcErrorCode::MethodNotFound);
                 continue;
             }
-            auto handler = it->second;
 
-            taskThreadPool_->enqueue([weakPtr,ioloop,tm,handler,meta = std::move(meta),body = std::move(body)]
+            auto handler = it->second;
+            std::weak_ptr<cmlib::TcpConnection> weakPtr = conn;
+            cmlib::EventLoop* ioloop = conn->getLoop();
+           
+            auto success = taskThreadPool_->tryEnqueue([weakPtr,ioloop,tm,handler,meta = std::move(meta),body = std::move(body)] 
             {
                 std::unique_ptr<google::protobuf::Message> response;
 
                 try 
                 {
                     response = handler(body);
-                } catch (...) {
-                    LOG_ERROR<<"处理业务逻辑时发生错误, seq = " << meta.seq;
+                } 
+                catch (const std::exception& e) 
+                {
+                    LOG_ERROR<< "Handle exception: "<<e.what() << ", seq= " <<meta.seq;
+                    ioloop->runInLoop([weakPtr,meta = std::move(meta)]()
+                    {
+                        auto conn = weakPtr.lock();
+                        if(conn)
+                        {
+                            RPC_Meta respMeta = meta;
+                            respMeta.err_code = static_cast<int32_t>(RpcErrorCode::InternalError);
+                            respMeta.retransmit = 0;
+                            cmlib::Buffer errorBuff;
+                            encode(&errorBuff, Flag::kResponse, kVersion, respMeta, nullptr);
+                            conn->send(&errorBuff);
+                        }
+                    });
+                    return;
+                } 
+                catch(...)
+                {
+                    LOG_ERROR << "Unknown handler exception, seq=" << meta.seq;
+                    ioloop->runInLoop([weakPtr, meta = std::move(meta)]() {
+                        auto conn = weakPtr.lock();
+                        if (conn) {
+                            RPC_Meta respMeta = meta;
+                            respMeta.err_code = static_cast<int32_t>(
+                                RpcErrorCode::InternalError);
+                            respMeta.retransmit = 0;
+                            cmlib::Buffer buf;
+                            encode(&buf, Flag::kResponse, kVersion, respMeta, nullptr);
+                            conn->send(&buf);
+                        }
+                    });
+                    return;
                 }
-
-                auto respShared = std::shared_ptr<google::protobuf::Message>(std::move(response));
-                ioloop->runInLoop([weakPtr, respShared, meta = std::move(meta)]
+                
+                // 处理结果
+                auto respShared = std::shared_ptr<google::protobuf::Message>(
+                    std::move(response));
+                ioloop->runInLoop(
+                    [weakPtr, respShared, meta = std::move(meta)]() mutable
                 {
                     auto conn = weakPtr.lock();
-                    if (conn && conn->connected() && respShared)
-                    {
-                        cmlib::Buffer sendBuff;
-                        encode(&sendBuff, 1, 1, meta, *respShared);
+                    if (!conn || !conn->connected()) return;
 
-                        conn->send(&sendBuff);
+                    if (respShared) {
+                        meta.err_code = static_cast<int32_t>(
+                            RpcErrorCode::NoError);
+                        meta.retransmit = 0;
+                        cmlib::Buffer sendBuf;
+                        encode(&sendBuf, Flag::kResponse, kVersion, meta, respShared.get());
+                        conn->send(&sendBuf);
+                    } else {
+                        LOG_WARNING << "Handler returned null, seq=" << meta.seq;
+                        meta.err_code = static_cast<int32_t>(
+                            RpcErrorCode::ParseError);
+                        meta.retransmit = 0;
+                        cmlib::Buffer sendBuf;
+                        encode(&sendBuf, Flag::kResponse, kVersion, meta, nullptr);
+                        conn->send(&sendBuf);
                     }
-                }
-            );
+                });
             });
+            if(!success)
+            {
+                LOG_WARNING<<"TaskThreadPool is full, seq=" <<meta.seq;
+                sendErrorResponse(conn, meta, RpcErrorCode::TaskPoolFull);
+            }
         }
     }
 }
@@ -253,4 +305,19 @@ std::string RPCServer::getLocalIp() const
 
     LOG_WARNING<<"GetLocalIp return ip is 127.0.0.1";
     return "127.0.0.1";
+}
+
+void RPCServer::sendErrorResponse(const cmlib::TcpConnectionPtr& conn,
+                                  const RPC_Meta& requestMeta,
+                                  RpcErrorCode errcode)
+{
+    if(!conn || !conn->connected()) return;
+    RPC_Meta responseMeta = requestMeta;
+    responseMeta.retransmit = 0;
+    responseMeta.err_code = static_cast<int32_t>(errcode);
+
+    cmlib::Buffer errorBuff;
+    encode(&errorBuff, Flag::kResponse, kVersion, responseMeta, nullptr);
+    
+    conn->send(&errorBuff);
 }
