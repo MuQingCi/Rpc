@@ -58,9 +58,9 @@ public:
             {
                 discovery_->unsubscribe(svc);
                 connPool_->removeService(svc);
-            }   
+            }
+            discovery_->shutdown();
         }
-        discovery_->shutdown();
         connPool_->stopHealthCheck();
     }
 

@@ -239,8 +239,8 @@ void RPCServer::stop()
             registry_->deregisterService(svc, ep);
             LOG_INFO << "Service " << svc << " deregistered at " << ep.host << ":" << ep.port;
         }
+        registry_->shutdown();
     }
-    registry_->shutdown();
 }
 
 void RPCServer::addService(const std::string& serviceName)

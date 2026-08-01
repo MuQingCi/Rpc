@@ -2,8 +2,10 @@
 #define CLEARMOON_RPC_TASK
 
 #include <concepts>
+#include <condition_variable>
 #include <coroutine>
 #include <exception>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -56,7 +58,32 @@ class Task
 public:
     struct promise_type : public detail::TaskPromiseBase<T, std::variant<std::monostate, T, std::exception_ptr>>
     {
+        std::mutex mutex;
+        std::condition_variable cond;
+        bool ready = false;
+
+        struct final_awaiter
+        {
+            bool await_ready() const noexcept { return false; }
+            template<typename Promise>
+            void await_suspend(std::coroutine_handle<Promise> h) noexcept
+            {
+                auto& promise = h.promise();
+                if(promise.continuation_)
+                    promise.continuation_.resume();
+                else
+                {
+                    std::unique_lock<std::mutex> lock(promise.mutex);
+                    promise.ready = true;
+                    promise.cond.notify_one();
+                }
+            }
+            void await_resume() noexcept{}
+        };
+        
         using Base = detail::TaskPromiseBase<T, std::variant<std::monostate, T, std::exception_ptr>>;
+
+        auto final_suspend() noexcept { return final_awaiter{}; }
 
         Task get_return_object()
         {
@@ -112,11 +139,19 @@ public:
     T get()
     {
         if (!handle_.done()) handle_.resume();
-        while (!handle_.done())
-            std::this_thread::yield();
+        // 阻塞等待
+        {
+            std::unique_lock lock(handle_.promise().mutex);
+            handle_.promise().cond.wait(lock, [this] { 
+                return handle_.done() || handle_.promise().ready; 
+            });
+        }
         return await_resume();
+        // if (!handle_.done()) handle_.resume();
+        // while (!handle_.done())
+        //     std::this_thread::yield();
+        // return await_resume();
     }
-
 private:
     handle_t handle_;
 };
@@ -130,7 +165,32 @@ class Task<void>
 public:
     struct promise_type : public detail::TaskPromiseBase<void, std::variant<std::monostate, std::exception_ptr>>
     {
+        std::mutex mutex;
+        std::condition_variable cond;
+        bool ready = false;
+
+        struct final_awaiter
+        {
+            bool await_ready() const noexcept { return false; }
+            template<typename Promise>
+            void await_suspend(std::coroutine_handle<Promise> h) noexcept
+            {
+                auto& promise = h.promise();
+                if(promise.continuation_)
+                    promise.continuation_.resume();
+                else
+                {
+                    std::unique_lock<std::mutex> lock(promise.mutex);
+                    promise.ready = true;
+                    promise.cond.notify_one();
+                }
+            }
+            void await_resume() noexcept{}
+        };
+
         using Base = detail::TaskPromiseBase<void, std::variant<std::monostate, std::exception_ptr>>;
+
+        auto final_suspend() noexcept { return final_awaiter{}; }
 
         Task<void> get_return_object()
         {
@@ -180,9 +240,18 @@ public:
     void get()
     {
         if (!handle_.done()) handle_.resume();
-        while (!handle_.done())
-            std::this_thread::yield();
+        // 阻塞等待
+        {
+            std::unique_lock lock(handle_.promise().mutex);
+            handle_.promise().cond.wait(lock, [this] { 
+                return handle_.done() || handle_.promise().ready; 
+            });
+        }
         await_resume();
+        // if (!handle_.done()) handle_.resume();
+        // while (!handle_.done())
+        //     std::this_thread::yield();
+        // await_resume();
     }
 
 private:
