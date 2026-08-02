@@ -2,6 +2,7 @@
 #define CLEARMOON_RCP_SERVER_H
 
 // ClearMoon 网络库
+#include "RpcFilter.h"
 #include "Service/IsServiceRegister.h"
 #include "net/Log/Logger.h"
 #include "net/TcpServer.h"
@@ -10,6 +11,7 @@
 #include "net/Buffer.h"
 #include "net/Callbacks.h"
 #include "TaskThreadPool.h"
+#include "./Filter/RpcFilterChain.h"
 
 //工具函数
 #include "ToolFunc.h"
@@ -53,10 +55,13 @@ using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(cons
     void stop();
 
     void addService(const std::string& serviceName);
+    void addFilter(std::shared_ptr<RpcFilter> filter){
+        chain_.addFilter(filter);
+    }
 private:
     std::string getLocalIp() const;
     void sendErrorResponse(const cmlib::TcpConnectionPtr& conn,
-                           const RPC_Meta& requestMeta,
+                           RPC_Meta& requestMeta,
                            RpcErrorCode errcode);
 
     //echo处理逻辑
@@ -78,6 +83,9 @@ private:
     std::shared_ptr<isServiceRegister> registry_;
     //服务名
     std::set<std::string> serviceNames_;
+
+    //过滤器链
+    RpcFilterChain chain_;
 
     mutable std::mutex mutex_;
 };

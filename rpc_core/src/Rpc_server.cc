@@ -74,7 +74,7 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
         Header header;
         RPC_Meta meta;
         std::string body;
-        
+
         if(!decode(buff, header, meta, body)) break;
 
         if (header.Flags == static_cast<uint8_t>(Flag::kAck)) // ACK 确认
@@ -86,6 +86,21 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
 
         if(header.Flags == static_cast<uint8_t>(Flag::kRequest))   //请求
         {
+            //过滤器处理
+            RpcContext ctx;
+            ctx["method_id"] = std::to_string(meta.method_id);
+            ctx["seq"] = std::to_string(meta.seq);
+            
+            //前置过滤器
+            if(!chain_.executeBefore(header, meta, body, ctx))
+            {
+                //过滤器不放行
+                sendErrorResponse(conn, meta, RpcErrorCode::UnknownError);
+                chain_.executeAfter(header, meta, ctx);
+                continue;
+            }
+
+            //如果对端启用超时重传则立刻Ack
             if(meta.retransmit == 1)
             {
                 auto metaCopy = meta;
@@ -100,6 +115,7 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
             {
                 LOG_ERROR << "Method not found";
                 sendErrorResponse(conn, meta, RpcErrorCode::MethodNotFound);
+                chain_.executeAfter(header, meta, ctx);
                 continue;
             }
 
@@ -107,7 +123,12 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
             std::weak_ptr<cmlib::TcpConnection> weakPtr = conn;
             cmlib::EventLoop* ioloop = conn->getLoop();
            
-            auto success = taskThreadPool_->tryEnqueue([weakPtr,ioloop,tm,handler,meta = std::move(meta),body = std::move(body)] 
+            //用于if(!success)
+            auto headerCopy   = header;
+            auto metaCopy   = meta;
+            auto ctxCopy  = ctx;
+
+            auto success = taskThreadPool_->tryEnqueue([this,weakPtr,ioloop,tm,handler, header = std::move(header), meta = std::move(meta),body = std::move(body), ctx = std::move(ctx)] 
             {
                 std::unique_ptr<google::protobuf::Message> response;
 
@@ -118,25 +139,25 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
                 catch (const std::exception& e) 
                 {
                     LOG_ERROR<< "Handle exception: "<<e.what() << ", seq= " <<meta.seq;
-                    ioloop->runInLoop([weakPtr,meta = std::move(meta)]()
+                    ioloop->runInLoop([this,weakPtr,meta = std::move(meta), ctx = std::move(ctx), header = std::move(header)]()
                     {
                         auto conn = weakPtr.lock();
-                        if(conn)
-                        {
-                            RPC_Meta respMeta = meta;
-                            respMeta.err_code = static_cast<int32_t>(RpcErrorCode::InternalError);
-                            respMeta.retransmit = 0;
-                            cmlib::Buffer errorBuff;
-                            encode(&errorBuff, Flag::kResponse, kVersion, respMeta, nullptr);
-                            conn->send(&errorBuff);
-                        }
+                        if(!conn || !conn->connected()) return;
+
+                        RPC_Meta respMeta = meta;
+                        respMeta.err_code = static_cast<int32_t>(RpcErrorCode::InternalError);
+                        respMeta.retransmit = 0;
+                        cmlib::Buffer errorBuff;
+                        encode(&errorBuff, Flag::kResponse, kVersion, respMeta, nullptr);
+                        conn->send(&errorBuff);
+                        chain_.executeAfter(header, meta, ctx);
                     });
                     return;
                 } 
                 catch(...)
                 {
                     LOG_ERROR << "Unknown handler exception, seq=" << meta.seq;
-                    ioloop->runInLoop([weakPtr, meta = std::move(meta)]() {
+                    ioloop->runInLoop([this, weakPtr, header = std::move(header), meta = std::move(meta), ctx = std::move(ctx)]() {
                         auto conn = weakPtr.lock();
                         if (conn) {
                             RPC_Meta respMeta = meta;
@@ -146,6 +167,7 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
                             cmlib::Buffer buf;
                             encode(&buf, Flag::kResponse, kVersion, respMeta, nullptr);
                             conn->send(&buf);
+                            chain_.executeAfter(header, meta, ctx);
                         }
                     });
                     return;
@@ -154,8 +176,9 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
                 // 处理结果
                 auto respShared = std::shared_ptr<google::protobuf::Message>(
                     std::move(response));
+
                 ioloop->runInLoop(
-                    [weakPtr, respShared, meta = std::move(meta)]() mutable
+                    [this, weakPtr, respShared, headerCopy = header, meta = std::move(meta), ctx = std::move(ctx)]() mutable
                 {
                     auto conn = weakPtr.lock();
                     if (!conn || !conn->connected()) return;
@@ -176,12 +199,15 @@ void RPCServer::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* bu
                         encode(&sendBuf, Flag::kResponse, kVersion, meta, nullptr);
                         conn->send(&sendBuf);
                     }
+
+                    chain_.executeAfter(headerCopy, meta, ctx);
                 });
             });
             if(!success)
             {
-                LOG_WARNING<<"TaskThreadPool is full, seq=" <<meta.seq;
-                sendErrorResponse(conn, meta, RpcErrorCode::TaskPoolFull);
+                LOG_WARNING<<"TaskThreadPool is full, seq=" <<metaCopy.seq;
+                sendErrorResponse(conn, metaCopy, RpcErrorCode::TaskPoolFull);
+                chain_.executeAfter(headerCopy, metaCopy, ctxCopy);
             }
         }
     }
@@ -224,7 +250,8 @@ void RPCServer::stop()
         started_ = false;
     }
     tcpServer_.stop();
-
+    //等待所有任务完成
+    taskThreadPool_->stop();
     std::unique_lock<std::mutex> lock(mutex_);
     if(registry_)
     {
@@ -233,6 +260,7 @@ void RPCServer::stop()
         ep.port = listenAddr_.toPort();
         ep.weight = 1;
 
+        //将每一个注册的服务节点取消注册
         for(const auto& svc : serviceNames_)
         {
             ep.service = svc;
@@ -308,13 +336,16 @@ std::string RPCServer::getLocalIp() const
 }
 
 void RPCServer::sendErrorResponse(const cmlib::TcpConnectionPtr& conn,
-                                  const RPC_Meta& requestMeta,
+                                  RPC_Meta& requestMeta,
                                   RpcErrorCode errcode)
 {
     if(!conn || !conn->connected()) return;
     RPC_Meta responseMeta = requestMeta;
     responseMeta.retransmit = 0;
     responseMeta.err_code = static_cast<int32_t>(errcode);
+
+    //设置请求meta的err_code以便过滤器检测
+    requestMeta.err_code  = static_cast<int32_t>(errcode);
 
     cmlib::Buffer errorBuff;
     encode(&errorBuff, Flag::kResponse, kVersion, responseMeta, nullptr);

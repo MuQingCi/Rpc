@@ -59,7 +59,8 @@ struct RPC_Meta
     uint32_t timeout;
     int32_t err_code;
     uint8_t retransmit; //设置为1时表示启动传输层的超时重传
-    uint8_t reserver[11];
+    uint64_t traceID;
+    uint8_t reserver[3];
 };
 #pragma pack(pop)
 

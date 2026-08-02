@@ -4,7 +4,11 @@
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
 #include "Message.pb.h"
+#include "../include/Filter/RateLimitFilter.h"
+#include "../include/Filter/CircuitBreakerFilter.h"
+#include "../include/Filter/TraceFilter.h"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -27,6 +31,14 @@ int main()
     //注册服务名
     server.addService("EchoService");
     server.addService("AddService");
+
+    //添加过滤器
+    auto bucket = std::make_shared<TokenBucket>(100, 200);//100令牌/秒，最大容量200
+
+    //按照TraceID过滤器、流量控制过滤器、熔断过滤器的顺序添加
+    server.addFilter(std::make_shared<TraceFilter>());
+    server.addFilter(std::make_shared<RateLimitFilter>(bucket));
+    server.addFilter(std::make_shared<CircuitBreakerFilter>(60, std::chrono::seconds(10))); //失误率为60%,每10s更新熔断窗口
 
     // ---- 注册 Echo 函数 ----
     server.registerMethod<CLRPC::EchoRequest, CLRPC::EchoResponse>(

@@ -7,6 +7,7 @@ add_library(rpc_core STATIC
     src/FileConfigRegister.cc
     src/EtcdRegister.cc
     src/EtcdDiscovery.cc
+    src/RpcFilterChain.cc
 )
 
 # 设置公开包含路径，供外部目标使用
@@ -15,6 +16,7 @@ add_library(rpc_core STATIC
 target_include_directories(rpc_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/Service
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/Filter
 )
 
 # 链接时，将 yaml-cpp 设为 PUBLIC，让依赖者自动链接

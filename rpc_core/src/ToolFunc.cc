@@ -61,13 +61,16 @@ void encode(cmlib::Buffer* buff, Flag flag, uint8_t version, const RPC_Meta& met
 
     //发送时无需使用Header
 
+    //字节序转换
     //Meta
     RPC_Meta netMeta{};
-    netMeta.seq = cmlib::host64ToNet(outMeta.seq);
-    netMeta.method_id = cmlib::host32ToNet(outMeta.method_id);
-    netMeta.timeout = cmlib::host32ToNet(outMeta.timeout);
-    netMeta.err_code = cmlib::host32ToNet(static_cast<int32_t>(outMeta.err_code));
+    netMeta.seq        = cmlib::host64ToNet(outMeta.seq);
+    netMeta.method_id  = cmlib::host32ToNet(outMeta.method_id);
+    netMeta.timeout    = cmlib::host32ToNet(outMeta.timeout);
+    netMeta.err_code   = cmlib::host32ToNet(static_cast<int32_t>(outMeta.err_code));
     netMeta.retransmit = outMeta.retransmit;
+    netMeta.traceID    = cmlib::host64ToNet(outMeta.traceID);
+    std::memcpy(netMeta.reserver, outMeta.reserver, sizeof(outMeta.reserver));
 
     buff->append(reinterpret_cast<const char*>(&netMeta), sizeof(RPC_Meta));
 
@@ -146,6 +149,7 @@ bool decode(cmlib::Buffer* buff, Header& header, RPC_Meta& meta,std::string& bod
         meta.timeout       = buff->readUint32();
         meta.err_code      = static_cast<int32_t>(buff->readUint32());
         meta.retransmit    = buff->readUint8();
+        meta.traceID       = buff->readUint64();
 
         buff->read(reinterpret_cast<char*>(meta.reserver), sizeof(meta.reserver));
 
