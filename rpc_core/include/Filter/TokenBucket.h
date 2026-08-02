@@ -23,6 +23,7 @@ public:
 
         std::unique_lock<std::mutex> lock(mutex_);
         token_ = std::min(static_cast<double>(capacity_), token_ + elapsed * rate_);
+        last_ = now;
         if(token_ >= 1.0)
         {
             --token_;

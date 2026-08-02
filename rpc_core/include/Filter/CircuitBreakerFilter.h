@@ -26,6 +26,8 @@ public:
     bool before(const Header& header, const RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
     {
         auto now = std::chrono::steady_clock::now();
+        
+        std::unique_lock<std::mutex> lock(mutex_);
         if(now - lastReset_ > window_)
         {
             total_ = 0;
