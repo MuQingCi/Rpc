@@ -84,6 +84,6 @@ private:
 
     bool shutdown_ = false;
     mutable std::mutex mutex_;
-  };
+};
 
 #endif  // CLEARMOON_RPC_ETCDDISCOVERY_H
