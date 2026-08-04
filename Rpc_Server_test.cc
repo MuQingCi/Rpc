@@ -1,12 +1,16 @@
 #include "EtcdRegister.h"
 #include "Service/FileConfigRegister.h"
+#include "TaskThreadPool.h"
 #include "rpc_core/include/Rpc_server.h"
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
 #include "Message.pb.h"
+
+#include "../include/Filter/TraceFilter.h"
+#include "../include/Filter/MetricsFilter.h"
 #include "../include/Filter/RateLimitFilter.h"
 #include "../include/Filter/CircuitBreakerFilter.h"
-#include "../include/Filter/TraceFilter.h"
+
 
 #include <chrono>
 #include <fstream>
@@ -24,7 +28,9 @@ int main()
     // auto registry = std::make_shared<FileConfigRegister>(&loop, "./config",5.0,RegistryMode::Server);
 
     //etcd配置
-    auto registry = std::make_shared<EtcdRegister>(&loop,"http://127.0.0.1:2379",10,3);
+    auto taskPool = std::make_shared<TaskThreadPool>(2);
+    taskPool->start();
+    auto registry = std::make_shared<EtcdRegister>(&loop, taskPool, "http://127.0.0.1:2379",10,3);
 
     RPCServer server(&loop, listenAddr,registry);
 
@@ -35,8 +41,9 @@ int main()
     //添加过滤器
     auto bucket = std::make_shared<TokenBucket>(100, 200);//100令牌/秒，最大容量200
 
-    //按照TraceID过滤器、流量控制过滤器、熔断过滤器的顺序添加
+    //按照TraceID过滤器、性能度量过滤器、流量控制过滤器、熔断过滤器的顺序添加
     server.addFilter(std::make_shared<TraceFilter>());
+    server.addFilter(std::make_shared<MetricsFilter>());
     server.addFilter(std::make_shared<RateLimitFilter>(bucket));
     server.addFilter(std::make_shared<CircuitBreakerFilter>(60, std::chrono::seconds(10))); //失误率为60%,每10s更新熔断窗口
 

@@ -1,6 +1,11 @@
+#include "CircuitBreakerFilter.h"
 #include "Client/Client.h"
 #include "EtcdDiscovery.h"
+#include "MetricsFilter.h"
+#include "RateLimitFilter.h"
 #include "Service/FileConfigRegister.h"
+#include "TokenBucket.h"
+#include "TraceFilter.h"
 #include "net/EventLoop.h"
 #include "net/EventLoopThread.h"
 #include "net/InetAddress.h"
@@ -103,8 +108,18 @@ int main()
     {
         auto rpcClient = std::make_shared<RPCClient>(loop, 4,discovery);
 
+        auto bucket = std::make_shared<TokenBucket>(10, 200);
+
+        //添加过滤器
+        rpcClient->addFilter(std::make_shared<TraceFilter>());
+        rpcClient->addFilter(std::make_shared<MetricsFilter>());
+        rpcClient->addFilter(std::make_shared<RateLimitFilter>(bucket));
+        rpcClient->addFilter(std::make_shared<CircuitBreakerFilter>(50,std::chrono::seconds(10)));
+
+        //订阅服务
         rpcClient->subscribe("EchoService");
         rpcClient->subscribe("AddService");
+
         // 等待连接池建立 TCP 连接
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
