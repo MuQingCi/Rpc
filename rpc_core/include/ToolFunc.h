@@ -14,20 +14,23 @@ namespace cmlib = clearmoon::net;
 const uint8_t kVersion = 1;
 
 enum class RpcErrorCode : int32_t {
-    NoError         = 0,
+    NoError          = 0,
 
     //编解码类
-    SerializeFailed = 1,   // 序列化失败
-    MagicError      = 2,   // 魔数错误（decode 时发现）
-    LengthError     = 3,   // 长度非法
-    IncompletePacket= 4,   // 半包（一般不会直接通知对端）
+    SerializeFailed  = 1,   // 序列化失败
+    MagicError       = 2,   // 魔数错误（decode 时发现）
+    LengthError      = 3,   // 长度非法
+    IncompletePacket = 4,   // 半包（一般不会直接通知对端）
 
     //服务端类
-    TaskPoolFull     = 5,   // 任务线程池已满
-    MethodNotFound   = 6,   // 未找到请求方法
-    ParseError       = 7,   // 请求体反序列化失败
-    InternalError    = 8,    // 业务处理内部异常
-    UnknownError    = 99
+    TaskPoolFull     = 20,  // 任务线程池已满
+    MethodNotFound   = 21,  // 未找到请求方法
+    ParseError       = 22,  // 请求体反序列化失败
+    InternalError    = 23,  // 业务处理内部异常
+
+    //客户端类
+    ClientBlock      = 50,
+    UnknownError     = 99
 };
 
 enum Flag : uint8_t

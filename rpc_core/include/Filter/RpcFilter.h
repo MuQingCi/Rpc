@@ -15,7 +15,7 @@ class RpcFilter
 {
 public:
     ~RpcFilter() = default;
-    virtual bool before(const Header& header, const RPC_Meta& meta, const std::string& body, RpcContext& ctx) = 0;
+    virtual bool before(const Header& header, RPC_Meta& meta, const std::string& body, RpcContext& ctx) = 0;
 
     virtual void after(const Header& header, const RPC_Meta& meta, const RpcContext& ctx) = 0;
 };

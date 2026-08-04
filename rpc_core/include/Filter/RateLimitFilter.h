@@ -14,10 +14,10 @@ public:
     RateLimitFilter(std::shared_ptr<TokenBucket> tokenBucket) 
                   : tokenBucket_(tokenBucket)
     {
-        LOG_INFO<<"Add RateLimitFilter";
+        LOG_DEBUG<<"Add RateLimitFilter";
     }
 
-    bool before(const Header& header, const RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
+    bool before(const Header& header, RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
     {
         if (!tokenBucket_->consume()) {
             ctx["block_reason"] = "rate_limited";

@@ -20,10 +20,10 @@ public:
                          window_(window),
                          lastReset_(std::chrono::steady_clock::now())
     {
-        LOG_INFO<<"Add CircuitBreakFilter, threshold: " << threshold << ",window: " << window.count();
+        LOG_DEBUG<<"Add CircuitBreakFilter, threshold: " << threshold << ",window: " << window.count();
     }
 
-    bool before(const Header& header, const RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
+    bool before(const Header& header, RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
     {
         auto now = std::chrono::steady_clock::now();
         
@@ -52,11 +52,11 @@ public:
     };
 
 private:
-    size_t threshold_;
-    size_t total_;
-    size_t failures_;
+    size_t threshold_;              //允许的错误率
+    size_t total_;                  //消息总数
+    size_t failures_;               //失败的消息数
     std::chrono::seconds window_;   //一次熔断窗口
-    std::chrono::steady_clock::time_point lastReset_;
+    std::chrono::steady_clock::time_point lastReset_;   //上一次更新熔断窗口的时间
 
     std::mutex mutex_;
 };

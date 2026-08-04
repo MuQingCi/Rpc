@@ -14,7 +14,7 @@ class TokenBucket
 public:
     TokenBucket(double rate, size_t capacity) : rate_(rate), capacity_(capacity), token_(capacity),last_(std::chrono::steady_clock::now()) 
     {
-        LOG_INFO<<"Create a TokenBucket, rate: " << rate << ", capacity:" << capacity;
+        LOG_DEBUG<<"Create a TokenBucket, rate: " << rate << ", capacity:" << capacity;
     }
 
     bool consume(){

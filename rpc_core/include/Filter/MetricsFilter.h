@@ -13,7 +13,7 @@
 class MetricsFilter : public RpcFilter
 {
 public:
-    bool before(const Header& header, const RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
+    bool before(const Header& header, RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
     {
         auto now = std::chrono::steady_clock::now();
 

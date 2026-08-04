@@ -13,14 +13,15 @@
 class TraceFilter : public RpcFilter
 {
 public:
-    TraceFilter() { LOG_INFO<< "Add TraceFilter"; }
+    TraceFilter() { LOG_DEBUG<< "Add TraceFilter"; }
     //记录对端元数据(meta)中的traceID以进行追踪,对端未设置traceID则本地生成一个
-    bool before(const Header& header, const RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
+    bool before(const Header& header, RPC_Meta& meta, const std::string& body, RpcContext& ctx) override
     {
         uint64_t tranceID = 0;
         if(meta.traceID == 0)
         {
             tranceID = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+            meta.traceID = tranceID;
         }
         else
             tranceID = meta.traceID;
