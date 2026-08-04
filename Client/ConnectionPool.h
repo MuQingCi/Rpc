@@ -150,7 +150,7 @@ private:
     //健康检查相关
     cmlib::TimerId healthCheckTimerId_;
     std::chrono::seconds healthCheckInterval_{5};
-    
+
     mutable std::mutex mutex_;
     std::condition_variable closeCv_;
 };

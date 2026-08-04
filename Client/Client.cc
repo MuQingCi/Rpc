@@ -16,18 +16,13 @@ RPCClient::RPCClient(EventLoop* loop, const InetAddress& serverAddr)
 				     connPool_(std::make_unique<ConnectionPool>(loop,serverAddr,4,LoadBalanceStrategy::RoundRobin)),
 				     dynamic_(false) {}
 
-RPCClient::RPCClient(cmlib::EventLoop* loop,
-                     size_t connPerServer,
-                     std::shared_ptr<isServiceDiscovery> discovery
-                    )
-                   : loop_(loop),
-                     connPool_(std::make_unique<ConnectionPool>(loop,
-                           LoadBalanceStrategy::RoundRobin,
-                                connPerServer)),
-                     discovery_(std::move(discovery)),
-                     dynamic_(true)
-{
-}
+RPCClient::RPCClient(cmlib::EventLoop* loop, 
+					 size_t conPerServer, 
+					 std::shared_ptr<isServiceDiscovery> discovery)
+					:loop_(loop),
+					 connPool_(std::make_unique<ConnectionPool>(loop,LoadBalanceStrategy::RoundRobin,conPerServer)),
+					 discovery_(std::move(discovery)),
+					 dynamic_(true){}
 
 void RPCClient::subscribe(const std::string& serviceName)
 {

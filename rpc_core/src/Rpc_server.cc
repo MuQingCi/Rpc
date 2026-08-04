@@ -1,4 +1,5 @@
 #include "../include/Rpc_server.h"
+#include "RpcFilterChain.h"
 #include "Service/Endpoint.h"
 #include "TaskThreadPool.h"
 #include "Message.pb.h"
@@ -23,8 +24,8 @@
 #include <utility>
 #include <ifaddrs.h>
 
-RPCServer::RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr) : tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr), taskThreadPool_(std::make_unique<TaskThreadPool>()),
-listenAddr_(listenAddr) //任务线程池的线程数默认为8
+RPCServer::RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr) : tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr), taskThreadPool_(std::make_unique<TaskThreadPool>()),//任务线程池的线程数默认为8
+listenAddr_(listenAddr)
 {
     tcpServer_.setMessageCallback([this](const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
 
@@ -331,7 +332,7 @@ std::string RPCServer::getLocalIp() const
     //     freeifaddrs(ifAddrStruct);
     // }
 
-    LOG_WARNING<<"GetLocalIp return ip is 127.0.0.1";
+    LOG_INFO<<"GetLocalIp return ip is 127.0.0.1";
     return "127.0.0.1";
 }
 

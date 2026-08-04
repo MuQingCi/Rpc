@@ -1,4 +1,5 @@
 #include "PooledConnection.h"
+#include "RpcFilter.h"
 #include "ToolFunc.h"
 #include "net/TimerId.h"
 #include "net/Log/Logger.h"
@@ -83,7 +84,7 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
     if (destroyed_.load(std::memory_order_acquire))
         return;
 
-    LOG_INFO << "RPCClient: " << index_ <<" received message";
+    LOG_DEBUG << "RPCClient: " << index_ <<" received message";
 
     uint32_t minLen = sizeof(Header) + sizeof(RPC_Meta);
 
@@ -114,6 +115,7 @@ void PooledConnection::onMessage(const cmlib::TcpConnectionPtr& conn, cmlib::Buf
                 encode(&ackBuff, Flag::kAck, kVersion, metaCopy, nullptr);
                 conn->send(&ackBuff);
             }
+
 
             std::function<void(const std::string&, int32_t)> callback;
 

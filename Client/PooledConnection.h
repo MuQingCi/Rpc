@@ -1,8 +1,11 @@
 #ifndef CLEARMOON_RPC_POOLCONNECTION_H
 #define CLEARMOON_RPC_POOLCONNECTION_H
 
+#include "RpcFilter.h"
+#include "RpcFilterChain.h"
 #include "net/Buffer.h"
 #include "net/Callbacks.h"
+#include "net/Log/Logger.h"
 #include "net/TcpClient.h"
 #include "ToolFunc.h"
 
@@ -36,6 +39,7 @@ class PooledConnection : public std::enable_shared_from_this<PooledConnection>
 public:
 using DisconnectCallback = std::function<void()>;
     PooledConnection(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t Index);
+
     ~PooledConnection();
 
     //连接
@@ -76,6 +80,12 @@ using DisconnectCallback = std::function<void()>;
                      std::shared_ptr<RpcAwaiter<Response>> awaiter,
                      std::chrono::milliseconds timeout,
                      uint32_t method_id);
+
+    template<typename Request, typename Response>
+    void sendRequest(const Request& request,
+                     std::shared_ptr<RpcAwaiter<Response>> awaiter,
+                     std::chrono::milliseconds timeout,
+                     uint32_t method_id, RpcFilterChain& chain);
 private:
     //请求上下文
     struct PendingContext
@@ -110,9 +120,9 @@ private:
     //序列号对应的Awaiter
     std::map<uint64_t, PendingContext> pending_;
 
-    mutable std::mutex mutex_;;
-
     DisconnectCallback onDisconnected_;
+
+    mutable std::mutex mutex_;
 };
 
 // ===================================================================
@@ -142,6 +152,9 @@ void PooledConnection::sendRequest(const Request& request,
     meta.timeout = static_cast<uint32_t>(timeout.count());
     meta.err_code = 0;
     meta.retransmit = 1; //若使用超时重传则设置为1,普通发送则设置为0
+
+    // Header header;
+    // RpcContext ctx;
 
     //3.编码为Buffer
     cmlib::Buffer sendBuff;
@@ -191,6 +204,115 @@ void PooledConnection::sendRequest(const Request& request,
     }
     else {
         onTimeout(seq);
+    }
+}
+
+template<typename Request, typename Response>
+void PooledConnection::sendRequest(const Request& request,
+                    std::shared_ptr<RpcAwaiter<Response>> awaiter,
+                    std::chrono::milliseconds timeout,
+                    uint32_t method_id,RpcFilterChain& chain)
+{
+    //1.获取seq
+    uint64_t seq;
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        seq = nextSeq++;
+    }
+
+    //2.设置RPC_Meta
+    RPC_Meta meta;
+    meta.seq = seq;
+    meta.method_id = method_id;
+    meta.timeout = static_cast<uint32_t>(timeout.count());
+    meta.err_code = 0;
+    meta.retransmit = 1; //若使用超时重传则设置为1,普通发送则设置为0
+
+    RpcContext rpcCtx;
+    rpcCtx["direction"] = "client";
+    rpcCtx["seq"] = meta.seq;
+    rpcCtx["method_id"] = meta.method_id;
+
+    std::string body;
+    if (request.SerializeToString(&body))
+    {
+        Header header = {RPC_MAGIC_NUMBER, kRequest, kVersion, static_cast<uint32_t>(sizeof(Header) + sizeof(RPC_Meta) + body.size())};
+
+        if(chain.executeBefore(header, meta, body, rpcCtx))
+        {
+            //3.编码为Buffer
+            cmlib::Buffer sendBuff;
+            encode(&sendBuff, Flag::kRequest, kVersion, meta, &request);
+
+            //4.在pendings_中注册
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+
+                //先创建并完善PendingContext
+                PendingContext ctx;
+                awaiter->setSeq(seq);
+                ctx.awaiter = awaiter;
+                ctx.seq = seq;
+
+                auto self = shared_from_this();
+
+                //超时取消回调
+                ctx.cancel = [awaiter,seq,self,&chain,header,meta,rpcCtx]
+                {
+                    auto m = meta;
+                    m.err_code = -1;
+                    chain.executeAfter(header, m, rpcCtx);
+
+                    awaiter->setError(-1);  //本地超时
+                    awaiter->resume();
+                    if(self->conn_)
+                        self->conn_->ackReceived(seq);
+                    self->activerequests_.fetch_sub(1,std::memory_order_relaxed);
+                };
+
+                ctx.onResponse = [awaiter,&chain,header,meta,rpcCtx](std::string body,int32_t err_code){
+                    if(err_code == 0)
+                        awaiter->setResponse(std::move(body));
+                    else
+                        awaiter->setError(err_code);    //远程错误码
+                    auto m = meta;
+                    m.err_code = err_code;
+                    chain.executeAfter(header, m, rpcCtx);
+
+                    awaiter->resume();
+                };
+
+                ctx.timerId = loop_->runAfter(timeout.count() / 1000.0, [self,seq]{ self->onTimeout(seq); });
+
+                ctx.completed = false;
+
+                pending_[seq] = std::move(ctx);
+                activerequests_.fetch_add(1,std::memory_order_relaxed);
+            }
+
+            // chain.executeAfter(header, meta, rpcCtx);
+            if(conn_ && conn_->connected())
+            {
+                conn_->sendWithRetransmit(&sendBuff,seq);
+            }
+            else {
+                onTimeout(seq);
+            }
+        }else {
+            meta.err_code = static_cast<int32_t>(RpcErrorCode::ClientBlock);
+            chain.executeAfter(header, meta, rpcCtx);
+
+            awaiter->setError(static_cast<uint32_t>(RpcErrorCode::UnknownError));
+            awaiter->resume();
+        }
+    }else {
+        LOG_ERROR<<"Request SerializeToString Error";
+        meta.err_code = static_cast<int32_t>(RpcErrorCode::ClientBlock);
+
+        awaiter->setError(static_cast<uint32_t>(RpcErrorCode::ClientBlock));
+        awaiter->resume();
+        return;
     }
 }
 

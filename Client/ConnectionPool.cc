@@ -32,7 +32,7 @@ ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
 }
 
 //服务分发版(service暂不使用)
-ConnectionPool::ConnectionPool(cmlib::EventLoop* loop, 
+ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
                                LoadBalanceStrategy strategy,
                                size_t connPerServer)
                              : loop_(loop),

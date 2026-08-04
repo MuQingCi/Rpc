@@ -2,11 +2,14 @@
 #define CLEARMOON_RPC_CLIENT_H
 
 #include "ConnectionPool.h"
+#include "../include/Filter/RpcFilterChain.h"
+#include "RpcFilter.h"
 #include "Service/IsServiceDiscovery.h"
 #include "Service/ServiceDiscoverer.h"
 #include "Task.h"
 #include "Message.pb.h"
 
+#include "ToolFunc.h"
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
 
@@ -42,7 +45,7 @@ class RPCClient : public std::enable_shared_from_this<RPCClient>
 public:
     RPCClient(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr);
 
-    RPCClient(cmlib::EventLoop* loop, size_t connPerServer,std::shared_ptr<isServiceDiscovery> discovery);
+    RPCClient(cmlib::EventLoop* loop, size_t conPerServer, std::shared_ptr<isServiceDiscovery> discovery);
 
     ~RPCClient()
     {
@@ -67,6 +70,11 @@ public:
     void subscribe(const std::string& serviceName);
     void unsubscribe(const std::string& serviceName);
 
+    void addFilter(std::shared_ptr<RpcFilter> filter)
+    {
+        chain_.addFilter(filter);
+    }
+
     //异步调用 --c++20的协程版本
     template<typename Request, typename Response>
     Task<Response> CallAsync(Request& req, std::chrono::milliseconds timeout, uint32_t method_id);
@@ -88,6 +96,8 @@ private:
     std::set<std::string> subscribedServices_;
     bool dynamic_;
 
+    //过滤器链
+    RpcFilterChain chain_;
     mutable std::mutex mutex_;
 };
 
@@ -100,7 +110,7 @@ Task<Response> RPCClient::CallAsync(Request& req,
     uint64_t seq = 0;
     auto awaiter = std::make_shared<RpcAwaiter<Response>>(conn->getLoop(), seq, timeout);
 
-    conn->sendRequest(req, awaiter, timeout, method_id);
+    conn->sendRequest(req, awaiter, timeout, method_id, chain_);
 
     co_return co_await *awaiter;
 }
@@ -116,7 +126,8 @@ Task<Response> RPCClient::CallAsync(const std::string& serviceName,
     uint64_t seq = 0;
     auto awaiter = std::make_shared<RpcAwaiter<Response>>(conn->getLoop(), seq, timeout);
 
-    conn->sendRequest(req, awaiter, timeout, method_id);
+    // conn->sendRequest(req, awaiter, timeout, method_id);
+    conn->sendRequest(req, awaiter, timeout, method_id, chain_);
 
     co_return co_await *awaiter;
 }
