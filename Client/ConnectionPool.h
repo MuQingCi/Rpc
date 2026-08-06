@@ -8,6 +8,7 @@
 #include "net/TimerId.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
@@ -35,12 +36,13 @@ using ConnPtr = std::shared_ptr<PooledConnection>;
 using ServerName = std::string;
 
     //无服务分发版
-    ConnectionPool(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t poolSize, LoadBalanceStrategy strategy = LoadBalanceStrategy::RoundRobin);
+    ConnectionPool(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, size_t poolSize, LoadBalanceStrategy strategy = LoadBalanceStrategy::RoundRobin, std::chrono::seconds healthCheckInterval = std::chrono::seconds(5));
 
     //服务分发版
     ConnectionPool(cmlib::EventLoop* loop,
                    LoadBalanceStrategy strategy,
-                   size_t connPerServer
+                   size_t connPerServer,
+                   std::chrono::seconds healthCheckInterval = std::chrono::seconds(5)
                 );
 
     ~ConnectionPool();
@@ -149,7 +151,7 @@ private:
     std::vector<ConnPtr> pendingClose_;
     //健康检查相关
     cmlib::TimerId healthCheckTimerId_;
-    std::chrono::seconds healthCheckInterval_{5};
+    std::chrono::seconds healthCheckInterval_;
 
     mutable std::mutex mutex_;
     std::condition_variable closeCv_;

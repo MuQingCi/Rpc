@@ -16,11 +16,26 @@ RPCClient::RPCClient(EventLoop* loop, const InetAddress& serverAddr)
 				     connPool_(std::make_unique<ConnectionPool>(loop,serverAddr,4,LoadBalanceStrategy::RoundRobin)),
 				     dynamic_(false) {}
 
+//从配置文件加载--静态单地址版
+RPCClient::RPCClient(EventLoop* loop, const InetAddress& serverAddr, const ClientConfig& cfg)
+				   : loop_(loop),
+				     connPool_(std::make_unique<ConnectionPool>(loop,serverAddr,cfg.connPerServer,cfg.strategy,cfg.healthCheckInterval)),
+				     dynamic_(false) {}
+
 RPCClient::RPCClient(cmlib::EventLoop* loop, 
 					 size_t conPerServer, 
 					 std::shared_ptr<isServiceDiscovery> discovery)
 					:loop_(loop),
 					 connPool_(std::make_unique<ConnectionPool>(loop,LoadBalanceStrategy::RoundRobin,conPerServer)),
+					 discovery_(std::move(discovery)),
+					 dynamic_(true){}
+
+//从配置文件加载--动态服务发现版
+RPCClient::RPCClient(cmlib::EventLoop* loop,
+					 const ClientConfig& cfg,
+					 std::shared_ptr<isServiceDiscovery> discovery)
+					:loop_(loop),
+					 connPool_(std::make_unique<ConnectionPool>(loop,cfg.strategy,cfg.connPerServer,cfg.healthCheckInterval)),
 					 discovery_(std::move(discovery)),
 					 dynamic_(true){}
 

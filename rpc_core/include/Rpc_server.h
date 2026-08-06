@@ -36,13 +36,13 @@ class RPCServer
 public:
 using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(const std::string& reqBody)>;
 
-    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr);
+    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr, size_t threadPoolSize = 8);
 
     //含配置注册的构造函数--单服务
-    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry, const std::string& serviceName);
+    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry, const std::string& serviceName, size_t threadPoolSize = 8);
 
     //含配置注册的构造函数
-    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry);
+    RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr,std::shared_ptr<isServiceRegister> registry, size_t threadPoolSize = 8);
 
     ~RPCServer();
 
@@ -58,6 +58,8 @@ using RpcHandler = std::function<std::unique_ptr<google::protobuf::Message>(cons
     void addFilter(std::shared_ptr<RpcFilter> filter){
         chain_.addFilter(filter);
     }
+    //设置注册端点权重
+    void setServiceWeight(uint16_t weight) { weight_ = weight; }
 private:
     std::string getLocalIp() const;
     void sendErrorResponse(const cmlib::TcpConnectionPtr& conn,
@@ -83,6 +85,8 @@ private:
     std::shared_ptr<isServiceRegister> registry_;
     //服务名
     std::set<std::string> serviceNames_;
+    //注册端点权重
+    uint16_t weight_ = 1;
 
     //过滤器链
     RpcFilterChain chain_;

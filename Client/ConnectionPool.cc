@@ -16,11 +16,13 @@
 ConnectionPool::ConnectionPool(cmlib::EventLoop* loop, 
                                const cmlib::InetAddress& serverAddr, 
                                size_t poolSize, 
-                               LoadBalanceStrategy strategy) 
+                               LoadBalanceStrategy strategy,
+                               std::chrono::seconds healthCheckInterval) 
                                : loop_(loop),
                                  serverAddr_(serverAddr),
                                  connNum_(poolSize),
-                                 strategy_(strategy)
+                                 strategy_(strategy),
+                                 healthCheckInterval_(healthCheckInterval)
 {
     for(size_t i = 0; i<poolSize; ++i)
     {
@@ -34,10 +36,12 @@ ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
 //服务分发版(service暂不使用)
 ConnectionPool::ConnectionPool(cmlib::EventLoop* loop,
                                LoadBalanceStrategy strategy,
-                               size_t connPerServer)
+                               size_t connPerServer,
+                               std::chrono::seconds healthCheckInterval)
                              : loop_(loop),
                                strategy_(strategy),
-                               connPerServer_(connPerServer)
+                               connPerServer_(connPerServer),
+                               healthCheckInterval_(healthCheckInterval)
 {
 }
 

@@ -24,7 +24,7 @@
 #include <utility>
 #include <ifaddrs.h>
 
-RPCServer::RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr) : tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr), taskThreadPool_(std::make_unique<TaskThreadPool>()),//任务线程池的线程数默认为8
+RPCServer::RPCServer(cmlib::EventLoop* loop, cmlib::InetAddress& listenAddr, size_t threadPoolSize) : tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr), taskThreadPool_(std::make_unique<TaskThreadPool>(threadPoolSize)),
 listenAddr_(listenAddr)
 {
     tcpServer_.setMessageCallback([this](const cmlib::TcpConnectionPtr& conn, cmlib::Buffer* buff, cmlib::Timestamp tm) { onMessage(conn, buff, tm); });
@@ -35,11 +35,12 @@ listenAddr_(listenAddr)
 RPCServer::RPCServer(cmlib::EventLoop* loop, 
                      cmlib::InetAddress& listenAddr,
                      std::shared_ptr<isServiceRegister> registry,
-                     const std::string& serviceName) 
+                     const std::string& serviceName,
+                     size_t threadPoolSize) 
                     : tcpServer_(loop, 
                         cmlib::TcpServer::ThreadPoolInitCallback(), 
                         listenAddr),
-                       taskThreadPool_(std::make_unique<TaskThreadPool>()),
+                       taskThreadPool_(std::make_unique<TaskThreadPool>(threadPoolSize)),
                        listenAddr_(listenAddr),
                        registry_(std::move(registry))
 {
@@ -50,9 +51,10 @@ RPCServer::RPCServer(cmlib::EventLoop* loop,
 
 RPCServer::RPCServer(cmlib::EventLoop* loop, 
                      cmlib::InetAddress& listenAddr,
-                     std::shared_ptr<isServiceRegister> registry)
+                     std::shared_ptr<isServiceRegister> registry,
+                     size_t threadPoolSize)
                     :tcpServer_(loop, cmlib::TcpServer::ThreadPoolInitCallback(), listenAddr),
-                    taskThreadPool_(std::make_unique<TaskThreadPool>()),
+                    taskThreadPool_(std::make_unique<TaskThreadPool>(threadPoolSize)),
                     listenAddr_(listenAddr),
                     registry_(std::move(registry))
 {
@@ -227,7 +229,7 @@ void RPCServer::start()
         Endpoint ep;
         ep.host = getLocalIp();
         ep.port = listenAddr_.toPort();
-        ep.weight = 1;
+        ep.weight = weight_;
 
         for(const auto& svc : serviceNames_)
         {
@@ -259,7 +261,7 @@ void RPCServer::stop()
         Endpoint ep;
         ep.host = getLocalIp();
         ep.port = listenAddr_.toPort();
-        ep.weight = 1;
+        ep.weight = weight_;
 
         //将每一个注册的服务节点取消注册
         for(const auto& svc : serviceNames_)
@@ -286,7 +288,7 @@ void RPCServer::addService(const std::string& serviceName)
     ep.service = serviceName;
     ep.host = getLocalIp();
     ep.port = listenAddr_.toPort();
-    ep.weight = 1;
+    ep.weight = weight_;
 
     if(started_)
         registry_->registerService(serviceName, ep);

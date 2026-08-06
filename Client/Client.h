@@ -2,6 +2,7 @@
 #define CLEARMOON_RPC_CLIENT_H
 
 #include "ConnectionPool.h"
+#include "ClientConfig.h"
 #include "../include/Filter/RpcFilterChain.h"
 #include "RpcFilter.h"
 #include "Service/IsServiceDiscovery.h"
@@ -46,6 +47,13 @@ public:
     RPCClient(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr);
 
     RPCClient(cmlib::EventLoop* loop, size_t conPerServer, std::shared_ptr<isServiceDiscovery> discovery);
+
+    // ---- 从配置文件加载的构造函数（替代硬编码） ----
+    //静态单地址版
+    RPCClient(cmlib::EventLoop* loop, const cmlib::InetAddress& serverAddr, const ClientConfig& cfg);
+
+    //动态服务发现版
+    RPCClient(cmlib::EventLoop* loop, const ClientConfig& cfg, std::shared_ptr<isServiceDiscovery> discovery);
 
     ~RPCClient()
     {
