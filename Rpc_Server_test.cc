@@ -2,6 +2,7 @@
 #include "Service/FileConfigRegister.h"
 #include "TaskThreadPool.h"
 #include "rpc_core/include/Rpc_server.h"
+#include "ServerConfig.h"
 #include "net/EventLoop.h"
 #include "net/InetAddress.h"
 #include "Message.pb.h"
@@ -21,31 +22,46 @@
 /// 注册 Echo 和 Add 两个函数，与 Rpc_Async_Client_Test 配合使用
 int main()
 {
+    //读取配置文件（config/server.yaml）
+    auto cfg = loadServerConfig(PROJECT_ROOT "/config/server.yaml");
+
     cmlib::EventLoop   loop;
-    cmlib::InetAddress listenAddr("127.0.0.1", 12345, false);
+    cmlib::InetAddress listenAddr(cfg.host, cfg.port, false);
 
-    //文件配置
-    // auto registry = std::make_shared<FileConfigRegister>(&loop, "./config",5.0,RegistryMode::Server);
-
-    //etcd配置
-    auto taskPool = std::make_shared<TaskThreadPool>(2);
+    //注册中心（etcd / 文件配置二选一）
+    auto taskPool = std::make_shared<TaskThreadPool>(cfg.threadPoolSize);
     taskPool->start();
-    auto registry = std::make_shared<EtcdRegister>(&loop, taskPool, "http://127.0.0.1:2379",10,3);
 
-    RPCServer server(&loop, listenAddr,registry);
+    std::shared_ptr<isServiceRegister> registry;
+    if(cfg.registryType == "file")
+    {
+        registry = std::make_shared<FileConfigRegister>(&loop, cfg.filePath, cfg.pollInterval, RegistryMode::Server);
+    }
+    else
+    {
+        registry = std::make_shared<EtcdRegister>(&loop, taskPool, cfg.etcdUrl, cfg.ttl, cfg.keepaliveInterval);
+    }
+
+    RPCServer server(&loop, listenAddr, registry, cfg.threadPoolSize);
+    server.setServiceWeight(cfg.serviceWeight);
 
     //注册服务名
-    server.addService("EchoService");
-    server.addService("AddService");
+    for(const auto& svc : cfg.services)
+    {
+        server.addService(svc);
+    }
 
     //添加过滤器
-    auto bucket = std::make_shared<TokenBucket>(100, 200);//100令牌/秒，最大容量200
+    auto bucket = std::make_shared<TokenBucket>(cfg.rateLimit, cfg.bucketCapacity);//令牌/秒，最大容量
 
     //按照TraceID过滤器、性能度量过滤器、流量控制过滤器、熔断过滤器的顺序添加
-    server.addFilter(std::make_shared<TraceFilter>());
-    server.addFilter(std::make_shared<MetricsFilter>());
-    server.addFilter(std::make_shared<RateLimitFilter>(bucket));
-    server.addFilter(std::make_shared<CircuitBreakerFilter>(60, std::chrono::seconds(10))); //失误率为60%,每10s更新熔断窗口
+    if(cfg.trace)
+        server.addFilter(std::make_shared<TraceFilter>());
+    if(cfg.metrics)
+        server.addFilter(std::make_shared<MetricsFilter>());
+    if(cfg.rateLimit > 0)
+        server.addFilter(std::make_shared<RateLimitFilter>(bucket));
+    server.addFilter(std::make_shared<CircuitBreakerFilter>(cfg.breakerErrorRate, cfg.breakerWindow));
 
     // ---- 注册 Echo 函数 ----
     server.registerMethod<CLRPC::EchoRequest, CLRPC::EchoResponse>(
@@ -67,7 +83,7 @@ int main()
             return resp;
         });
 
-    std::cout << "RPC Server running on 127.0.0.1:12345 ..." << std::endl;
+    std::cout << "RPC Server running on " << cfg.host << ":" << cfg.port << " ..." << std::endl;
     std::cout << "Registered methods: Echo (id=0), Add (id=1)" << std::endl;
 
     server.start();
