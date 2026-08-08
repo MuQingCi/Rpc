@@ -55,14 +55,20 @@ using ServerName = std::string;
     class Borrowed
     {
     public:
-        Borrowed(std::shared_ptr<PooledConnection> conn) : conn_(std::move(conn)){}
+        Borrowed(std::shared_ptr<PooledConnection> conn, ConnectionPool* pool = nullptr) : conn_(std::move(conn)), pool_(pool){}
         ~Borrowed() 
         { 
             if(conn_)
             {
                 conn_->returnToIdleIfBusy();
+                //归还连接后唤醒等待中的 acquire()，避免连接耗尽时立即抛异常刷屏
+                if(pool_) pool_->notifyAvailable();
             }
         };
+
+        //句柄是否持有有效连接（连接耗尽单次尝试时返回空句柄）
+        bool valid() const { return conn_ != nullptr; }
+        explicit operator bool() const { return conn_ != nullptr; }
 
         //运算符重载--以便该类可以像原始指针一样使用
         PooledConnection* operator->() const { return conn_.get(); }
@@ -76,7 +82,8 @@ using ServerName = std::string;
         Borrowed(Borrowed&&) = default;
         Borrowed& operator=(Borrowed&&) = default;
     private:
-        std::shared_ptr<PooledConnection> conn_;        
+        std::shared_ptr<PooledConnection> conn_;
+        ConnectionPool* pool_ = nullptr;   //归还时通知连接池唤醒等待者
     };
 
     //开始/关闭心跳检查
@@ -155,5 +162,13 @@ private:
 
     mutable std::mutex mutex_;
     std::condition_variable closeCv_;
+
+    //连接耗尽时 acquire() 的等待/唤醒（Borrowed 归还时 notify）
+    std::condition_variable availCv_;
+    //等待安全网：连接一直不可用时有限等待后抛异常，避免无限阻塞
+    static constexpr std::chrono::milliseconds kAcquireWaitTimeout{1000};
+
+    //连接被归还时唤醒等待者
+    void notifyAvailable() { availCv_.notify_all(); }
 };
 #endif

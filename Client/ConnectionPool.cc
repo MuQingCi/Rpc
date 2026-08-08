@@ -94,7 +94,18 @@ ConnectionPool::~ConnectionPool()
     
 
     std::unique_lock<std::mutex> lock(mutex_);
-    closeCv_.wait(lock,[this]{return pendingClose_.empty();});
+
+    //已断开的连接其 onDisconnected 回调永远不会触发（Disconnect() 是空操作），
+    //直接剔除，避免永久等待；剩余连接有限等待 IO 线程回调完成。
+    pendingClose_.erase(std::remove_if(pendingClose_.begin(), pendingClose_.end(),
+        [](const ConnPtr& c) { return !c->isConnected(); }),
+        pendingClose_.end());
+
+    if(!pendingClose_.empty())
+        closeCv_.wait_for(lock, std::chrono::seconds(2),
+                          [this]{ return pendingClose_.empty(); });
+
+    pendingClose_.clear();
 }
 
 void ConnectionPool::startHealthCheck()
@@ -137,15 +148,26 @@ ConnectionPool::Borrowed ConnectionPool::acquire(const ServerName& name)
     size_t groupIdx = entry.endpointRrIndex->fetch_add(1,std::memory_order_relaxed) % entry.groups.size();
     auto& group = entry.groups[groupIdx];
 
-    switch (strategy_) {
-        case LoadBalanceStrategy::RoundRobin :
-            return acquireRoundRobin(group);
-        case LoadBalanceStrategy::LeastConnection : 
-            return acquireLeastConnection(group);
-        case LoadBalanceStrategy::Random : 
-            return acquireRandom(group);
-        default:
-            return acquireRoundRobin(group);
+    //单次尝试 + 有限等待：连接瞬时耗尽时阻塞等待归还而非立即抛异常
+    while(true)
+    {
+        switch (strategy_) {
+            case LoadBalanceStrategy::RoundRobin :
+                if (auto b = acquireRoundRobin(group)) return b;
+                break;
+            case LoadBalanceStrategy::LeastConnection : 
+                if (auto b = acquireLeastConnection(group)) return b;
+                break;
+            case LoadBalanceStrategy::Random : 
+                if (auto b = acquireRandom(group)) return b;
+                break;
+            default:
+                if (auto b = acquireRoundRobin(group)) return b;
+                break;
+        }
+
+        if(availCv_.wait_for(lock, kAcquireWaitTimeout) == std::cv_status::timeout)
+            throw RpcConnectionException("Service busy, acquire timeout: " + name);
     }
 }
 
@@ -425,46 +447,62 @@ ConnectionPool::Borrowed ConnectionPool::acquireRoundRobin()
     std::unique_lock<std::mutex> lock(mutex_);
 
     size_t n = size();
-    size_t start = rrIndex_.fetch_add(1,std::memory_order_relaxed) % n;
+    if(n == 0)
+        throw RpcConnectionException("No Healthy Connection avaiable!");
 
-    for(size_t i=0; i<n; ++i)
+    while(true)
     {
-        size_t index = (start+i) % n;
-        auto& conn = connections_[index];
+        size_t start = rrIndex_.fetch_add(1,std::memory_order_relaxed) % n;
 
-        if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
+        for(size_t i=0; i<n; ++i)
         {
-            conn->setState(ConnState::BUSY);
-            return Borrowed(conn);
-        }
-    }
+            size_t index = (start+i) % n;
+            auto& conn = connections_[index];
 
-    throw RpcConnectionException("No Healthy Connection avaiable!");
+            if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
+            {
+                conn->setState(ConnState::BUSY);
+                return Borrowed(conn, this);
+            }
+        }
+
+        //连接瞬时耗尽：等待归还（Borrowed 析构 notify_all），有限超时作为安全网
+        if(availCv_.wait_for(lock, kAcquireWaitTimeout) == std::cv_status::timeout)
+            throw RpcConnectionException("No Healthy Connection avaiable! (acquire timeout)");
+    }
 }
 
 ConnectionPool::Borrowed ConnectionPool::acquireLeastConnection()
 {
     std::unique_lock<std::mutex> lock(mutex_);
 
-    ConnPtr bestConnPtr = nullptr;
-    size_t min = std::numeric_limits<size_t>::max();
-
-    for(auto& conn : connections_)
-    {
-        if(!conn->isHealthy() || conn->state() == ConnState::BUSY) continue;
-        size_t active = conn->activeRequest();
-        if(active<min)
-        {
-            min = active;
-            bestConnPtr = conn;
-        }
-    }
-    if(!bestConnPtr) 
+    if(connections_.empty())
         throw RpcConnectionException("No Healthy Connection avaiable!");
 
-    bestConnPtr->setState(ConnState::BUSY);
+    while(true)
+    {
+        ConnPtr bestConnPtr = nullptr;
+        size_t min = std::numeric_limits<size_t>::max();
 
-    return Borrowed(bestConnPtr);
+        for(auto& conn : connections_)
+        {
+            if(!conn->isHealthy() || conn->state() == ConnState::BUSY) continue;
+            size_t active = conn->activeRequest();
+            if(active<min)
+            {
+                min = active;
+                bestConnPtr = conn;
+            }
+        }
+        if(bestConnPtr) 
+        {
+            bestConnPtr->setState(ConnState::BUSY);
+            return Borrowed(bestConnPtr, this);
+        }
+
+        if(availCv_.wait_for(lock, kAcquireWaitTimeout) == std::cv_status::timeout)
+            throw RpcConnectionException("No Healthy Connection avaiable! (acquire timeout)");
+    }
 }
 
 ConnectionPool::Borrowed ConnectionPool::acquireRandom()
@@ -474,21 +512,28 @@ ConnectionPool::Borrowed ConnectionPool::acquireRandom()
     thread_local std::mt19937 rng(std::random_device{}());
 
     size_t n = connections_.size();
+    if(n == 0)
+        throw RpcConnectionException("No Healthy Connection avaiable!");
     
-    std::uniform_int_distribution<size_t> dist(0,n-1);
-
-    for(size_t attemp = 0; attemp<10; attemp++)
+    while(true)
     {
-        size_t idex = dist(rng);
+        std::uniform_int_distribution<size_t> dist(0,n-1);
 
-        auto& conn = connections_[idex];
-        if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
+        for(size_t attempt = 0; attempt < n; attempt++)
         {
-            conn->setState(ConnState::BUSY);
-            return Borrowed(conn);
+            size_t idex = dist(rng);
+
+            auto& conn = connections_[idex];
+            if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
+            {
+                conn->setState(ConnState::BUSY);
+                return Borrowed(conn, this);
+            }
         }
+
+        if(availCv_.wait_for(lock, kAcquireWaitTimeout) == std::cv_status::timeout)
+            throw RpcConnectionException("No Healthy Connection avaiable! (acquire timeout)");
     }
-    throw RpcConnectionException("No Healthy Connection avaiable!");
 }
 
 //服务发现版
@@ -496,6 +541,9 @@ ConnectionPool::Borrowed ConnectionPool::acquireRoundRobin(ServerConnGroup& grou
 {
     //1.先获取Serverkey对应的连接容器
     size_t n = group.connections.size();
+    if(n == 0)
+        throw RpcConnectionException("No Healthy Connection avaiable!");
+
     size_t start = group.connRrIndex->fetch_add(1,std::memory_order_relaxed) % n;
 
     //遍历容器找到第一个健康且Idle的连接
@@ -507,11 +555,12 @@ ConnectionPool::Borrowed ConnectionPool::acquireRoundRobin(ServerConnGroup& grou
         if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
         {
             conn->setState(ConnState::BUSY);
-            return Borrowed(conn);
+            return Borrowed(conn, this);
         }
     }
 
-    throw RpcConnectionException("No Healthy Connection avaiable!");
+    //无可用连接：返回空句柄，由 acquire(name) 等待归还后重试
+    return Borrowed(nullptr, this);
 }
 
 ConnectionPool::Borrowed ConnectionPool::acquireLeastConnection(ServerConnGroup& group)
@@ -529,12 +578,14 @@ ConnectionPool::Borrowed ConnectionPool::acquireLeastConnection(ServerConnGroup&
             bestConnPtr = conn;
         }
     }
-    if(!bestConnPtr) 
-        throw RpcConnectionException("No Healthy Connection avaiable In Serveice: !");
+    if(bestConnPtr) 
+    {
+        bestConnPtr->setState(ConnState::BUSY);
+        return Borrowed(bestConnPtr, this);
+    }
 
-    bestConnPtr->setState(ConnState::BUSY);
-
-    return Borrowed(bestConnPtr);
+    //无可用连接：返回空句柄，由 acquire(name) 等待归还后重试
+    return Borrowed(nullptr, this);
 }
 
 ConnectionPool::Borrowed ConnectionPool::acquireRandom(ServerConnGroup& group)
@@ -542,10 +593,12 @@ ConnectionPool::Borrowed ConnectionPool::acquireRandom(ServerConnGroup& group)
     thread_local std::mt19937 rng(std::random_device{}());
 
     size_t n = group.connections.size();
-    
+    if(n == 0)
+        throw RpcConnectionException("No Healthy Connection avaiable!");
+
     std::uniform_int_distribution<size_t> dist(0,n-1);
 
-    for(size_t attemp = 0; attemp<10; attemp++)
+    for(size_t attempt = 0; attempt < n; attempt++)
     {
         size_t idex = dist(rng);
 
@@ -553,10 +606,12 @@ ConnectionPool::Borrowed ConnectionPool::acquireRandom(ServerConnGroup& group)
         if(conn->isHealthy() && conn->state() == ConnState::IDLE) 
         {
             conn->setState(ConnState::BUSY);
-            return Borrowed(conn);
+            return Borrowed(conn, this);
         }
     }
-    throw RpcConnectionException("No Healthy Connection avaiable!");
+
+    //无可用连接：返回空句柄，由 acquire(name) 等待归还后重试
+    return Borrowed(nullptr, this);
 }
 
 //健康检查 isConnected() 与状态设置存在窗口：doHealthCheck 检测到 !isConnected()后设置 UNHEALTHY，但 onConnection 回调可能随后将状态恢复为 IDLE，导致重复 Connect()
