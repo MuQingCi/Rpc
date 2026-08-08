@@ -143,17 +143,23 @@ void Connector::handleError()
     LOG_ERROR << "Connector::handleError";
     if (state_ == kConnecting)
     {
-        channel_->remove();
-        channel_.reset();
-        sock_ = Socket();
         setState(kDisconnected);
+        channel_->remove();
 
-        //cancel连接超时定时器
-        if(connectTimeoutId_.valid())
-        {
-            loop_->cancel(connectTimeoutId_);
-            connectTimeoutId_ = TimerId{};
-        }
+        //延后销毁 Channel：handleEvent 中 error 分支之后的 write 分支仍可能被触发，
+        //若立即 channel_.reset() 将访问悬垂对象（与 TcpConnection 断开竞态同源）
+        auto self = shared_from_this();
+        loop_->queueInLoop([self] {
+            self->channel_.reset();
+            self->sock_ = Socket();
+
+            //cancel连接超时定时器
+            if(self->connectTimeoutId_.valid())
+            {
+                self->loop_->cancel(self->connectTimeoutId_);
+                self->connectTimeoutId_ = TimerId{};
+            }
+        });
     }
 }
 
@@ -165,11 +171,16 @@ void Connector::handleTimeout()
 
     if(state_ != kConnecting) return;
 
-    channel_->remove();
-    channel_.reset();
-
-    sock_ = Socket();
+    //立即置位并摘除事件，防止事件批内其他分支继续处理该连接
     setState(kDisconnected);
+    channel_->remove();
+
+    //延后销毁 Channel：定时器回调在事件批内执行，同批可能还有该 fd 的其他事件待处理
+    auto self = shared_from_this();
+    loop_->queueInLoop([self] {
+        self->channel_.reset();
+        self->sock_ = Socket();
+    });
 
     connectTimeoutId_ = TimerId{};
 }

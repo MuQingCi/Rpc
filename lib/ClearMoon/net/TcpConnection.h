@@ -10,6 +10,7 @@
 #include "net/Buffer.h"
 #include "net/TimerId.h"
 #include "net/Timer.h"
+#include "net/Timestamp.h"
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -117,6 +118,8 @@ private:
     void resetIdleTimer();
     //执行清理空闲连接任务
     void onIdleTimeout();
+    //更新最近活动时间戳（只更新时间戳、不操作定时器，避免高频 cancel+add 定时器风暴）
+    void touchActivity();
 
     void setState(StateE s) { state_.store(s,std::memory_order_release); }
 
@@ -152,7 +155,8 @@ private:
     //空闲定时器处理相关
     //定时清理空闲连接定时器
     TimerId idleTimerId_;
-    
+    Timestamp lastActive_;          //最近一次读写活动的时间戳（用于空闲判定）
+
     const double kTimeoutSeconds_ = 60;  //超时时间
 };
 }

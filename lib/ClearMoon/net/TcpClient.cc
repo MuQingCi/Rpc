@@ -63,9 +63,17 @@ void TcpClient::removeConnection(const TcpConnectionPtr& conn)
     loop_->assertInLoopThread();
     if (connection_ == conn)
     {
-        connection_.reset();
-        conn->connectDestroyed();
+        // 延后到本轮事件批处理结束后再析构连接：
+        // Channel::handleEvent 可能在同一批事件中先触发 error 分支(handleClose)再触发
+        // write 分支；若连接在 handleClose 内即析构，后续分支将访问悬垂的 Channel。
+        loop_->queueInLoop([this, conn] {
+            if (connection_ == conn)
+            {
+                connection_.reset();
+                conn->connectDestroyed();
 
-        if(closeCallback_) closeCallback_(conn);
+                if(closeCallback_) closeCallback_(conn);
+            }
+        });
     }
 }

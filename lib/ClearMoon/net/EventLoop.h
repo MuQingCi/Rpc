@@ -34,6 +34,12 @@ using Func = std::function<void()>;
 
     void runInLoop(Func cb);
 
+    /**
+     * @brief 将回调排入待执行队列，不在当前线程立即执行，待本轮事件批处理完成后执行
+     *        用于延迟连接对象析构，避免 Channel::handleEvent 中对已析构对象的悬垂访问
+     */
+    void queueInLoop(Func cb);
+
     void assertInLoopThread();
 
     bool isInThread() const { return tid_ == Current::tid(); }
@@ -72,7 +78,6 @@ using FuncList = std::vector<std::function<void()>>;
 
     void handleWeakup();
     void doPendingFuncs();
-    void queueInLoop(Func cb);
 
     pid_t tid_;    
     Mutex mutex_;

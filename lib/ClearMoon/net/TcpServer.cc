@@ -90,7 +90,8 @@ void TcpServer::newConnection(Socket socket, InetAddress peerAddress)
 
 void TcpServer::removeConnection(const TcpConnectionPtr& conn)
 {
-    baseloop_->runInLoop([this, conn]{ removeConnectionInLoop(conn); });
+    // 延后到 baseloop 本轮事件批处理结束后再移除/析构连接（防止 handleEvent 悬垂）
+    baseloop_->queueInLoop([this, conn]{ removeConnectionInLoop(conn); });
 }
 
 void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& conn)

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <endian.h>
 #include <string>
+#include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -158,7 +159,8 @@ ssize_t Buffer::readFd(int fd, int* savedErrno)
 
 ssize_t Buffer::WriteFd(int fd, int* savedErrno)
 {
-    ssize_t n = ::write(fd, peek(), readableBytes());
+    // MSG_NOSIGNAL：对端已关闭时写不触发 SIGPIPE，避免整个进程被信号杀死
+    ssize_t n = ::send(fd, peek(), readableBytes(), MSG_NOSIGNAL);
     if(n < 0)
         *savedErrno = errno;
     else

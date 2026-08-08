@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <random>
 #include <sys/sendfile.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -71,6 +72,12 @@ TcpConnection::TcpConnection(EventLoop* loop, std::string name,
     channel_.setWriteCallback([this] { handleWrite(); });
     channel_.setErrorCallback([this] { handleError(); });
     socket_.setNonBlocking(true);
+
+    //关闭 Nagle 算法：
+    // ① 消除 Nagle×延迟ACK 交互造成的 ~40ms 单次 RPC 延迟下限（ss 实测 ato:40）
+    // ② 避免请求总长超过一个 MSS 时，Nagle 扣住尾段等 ACK、而应用层因包不完整
+    //    无法回复应用层 ACK，造成双向等待的永久死锁
+    socket_.setTcpNoDelay(true);
 }
 
 TcpConnection::~TcpConnection()
@@ -106,7 +113,9 @@ void TcpConnection::connectEstablelished()
     channel_.enableReading();
     setState(kConnected);
 
-    //连接建立时启动IdleTimer
+    //连接建立时初始化最近活动时间并启动 IdleTimer（此后读写只更新 lastActive_，
+    //不再反复 cancel+add，避免 timerfd 风暴）
+    lastActive_ = Timestamp::now();
     resetIdleTimer();
 
     if(connectionCallback_) 
@@ -275,11 +284,12 @@ void TcpConnection::sendInLoop(const void* data, size_t len)
     ssize_t n = 0;
     if(!channel_.isWriting() && writeBuffer_.readableBytes() == 0)
     {
-        n = ::write(channel_.getFd(), data, len);
+        // MSG_NOSIGNAL：对端已关闭时写不触发 SIGPIPE，避免整个进程被信号杀死
+        n = ::send(channel_.getFd(), data, len, MSG_NOSIGNAL);
         if(n >= 0)
         {
-            //触发超时重传时也需更新空闲定时器
-            resetIdleTimer();
+            //触发超时重传时也需更新最近活动时间
+            touchActivity();
             
             if(static_cast<size_t>(n) == len)
             {
@@ -358,8 +368,8 @@ void TcpConnection::handleRead()
     Timestamp t = Timestamp::now();
     if(n > 0 )
     {
-        //重置空闲处理定时器
-        resetIdleTimer();
+        //更新最近活动时间（不操作定时器）
+        touchActivity();
 
         if(messageCallback_) messageCallback_(shared_from_this(), &readBuffer_, t);
     }
@@ -381,8 +391,8 @@ void TcpConnection::handleWrite()
 
     if(!channel_.isWriting()) return;
 
-    //重置空闲处理定时器
-    resetIdleTimer();
+    //更新最近活动时间（不操作定时器）
+    touchActivity();
 
     // ========== 先排空 writeBuffer_（比如文件模式下响应头可能还未发送完）==========
     if(writeBuffer_.readableBytes() > 0)
@@ -600,9 +610,27 @@ void TcpConnection::resetIdleTimer()
     idleTimerId_ = loop_->runAfter(kTimeoutSeconds_, [this] { onIdleTimeout(); });
 }
 
+void TcpConnection::touchActivity()
+{
+    //只更新时间戳；定时器到期时再按剩余时间重调度，避免高频 cancel+add 风暴
+    lastActive_ = Timestamp::now();
+}
+
 void TcpConnection::onIdleTimeout()
 { 
     loop_->assertInLoopThread();
-    // shutdown();
-    forceCloseInLoop();
+
+    const int64_t timeoutUs = static_cast<int64_t>(kTimeoutSeconds_ * 1000000);
+    int64_t elapsedUs = Timestamp::now().getMicroSecond() - lastActive_.getMicroSecond();
+
+    //距上次活动已超过空闲阈值：断开连接
+    if(elapsedUs >= timeoutUs)
+    {
+        forceCloseInLoop();
+        return;
+    }
+
+    //期间仍有活动：按剩余时间重新调度（定时器到期前零 syscall）
+    double remain = (timeoutUs - elapsedUs) / 1000000.0;
+    idleTimerId_ = loop_->runAfter(remain, [this]{ onIdleTimeout(); });
 }
